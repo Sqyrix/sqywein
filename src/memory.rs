@@ -54,7 +54,12 @@ mod tests {
     fn kendi_bellegi() {
         let pid = std::process::id();
         let mb = super::private_bytes(pid) / (1024 * 1024);
-        let v: Vec<u8> = vec![1; 64 * 1024 * 1024];
+        // Derleyici diziyi "kullanılmıyor" diye atmasın: her sayfaya gerçekten yazılır.
+        let mut v: Vec<u8> = vec![0; 64 * 1024 * 1024];
+        for i in (0..v.len()).step_by(4096) {
+            v[i] = 1;
+        }
+        let v = std::hint::black_box(v);
         let after = super::private_bytes(pid) / (1024 * 1024);
         println!("önce {mb} MB, 64 MB ayırınca {after} MB ({})", v.len());
         assert!(after >= mb + 50, "özel bellek okunamıyor");

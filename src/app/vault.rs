@@ -18,6 +18,8 @@ const HELLO_GRACE: Duration = Duration::from_secs(60);
 pub(super) enum Gate {
     Reveal(u64),
     Export,
+    /// Sayfadaki formu doldur: (yanıt gidecek çerçeve, belgenin adresi, hesap).
+    Fill(Option<ICoreWebView2Frame>, String, u64),
 }
 
 /// Kaydedilmeyi bekleyen giriş: (sayfa adresi, kullanıcı adı, şifre, güncelleme mi).
@@ -65,15 +67,11 @@ impl App {
                 }
             }
             "pw.fill" => {
+                // Kullanıcı listeden hesap seçti: Windows Hello ile doğrulanınca doldurulur.
                 let id = msg["id"].as_u64().unwrap_or(0);
-                // Yalnızca bu sayfayla eşleşen bir hesabın şifresi verilir.
-                let found = self.vault.matches(source).iter().find(|c| c.id == id).map(|c| (c.username.clone(), c.password.clone()));
-                if let Some((username, password)) = found {
-                    self.vault.touch(id);
-                    self.save_vault();
-                    send(self, json!({ "type": "pw.secret", "id": id, "username": username, "password": password }));
-                }
+                self.gate(tab_id, Gate::Fill(frame.clone(), source.to_string(), id));
             }
+            "pw.manage" => self.open_page("passwords"),
             "pw.submitted" => {
                 let username = msg["username"].as_str().unwrap_or("").to_string();
                 let password = msg["password"].as_str().unwrap_or("").to_string();
@@ -201,12 +199,29 @@ impl App {
         self.hello_pending.push((tab_id, action));
         if first {
             self.hello_request += 1;
-            hello::verify(self.hwnd, "Kayıtlı şifrelere erişmek için kimliğini doğrula.", self.hello_request);
+            let message = if matches!(self.hello_pending[0].1, Gate::Fill(..)) {
+                "Kayıtlı şifreyi doldurmak için kimliğini doğrula."
+            } else {
+                "Kayıtlı şifrelere erişmek için kimliğini doğrula."
+            };
+            hello::verify(self.hwnd, message, self.hello_request);
         }
     }
 
     fn fulfil(&mut self, tab_id: u32, action: Gate) {
         match action {
+            Gate::Fill(frame, source, id) => {
+                // Yalnızca bu sayfayla eşleşen bir hesabın şifresi verilir.
+                let found = self.vault.matches(&source).iter().find(|c| c.id == id).map(|c| (c.username.clone(), c.password.clone()));
+                let Some((username, password)) = found else { return };
+                self.vault.touch(id);
+                self.save_vault();
+                let msg = json!({ "type": "pw.secret", "id": id, "username": username, "password": password });
+                match frame.and_then(|f| f.cast::<ICoreWebView2Frame2>().ok()) {
+                    Some(f2) => unsafe { let _ = f2.PostWebMessageAsJson(&HSTRING::from(msg.to_string())); },
+                    None => self.reply(tab_id, msg),
+                }
+            }
             Gate::Reveal(id) => {
                 if let Some(c) = self.vault.get(id) {
                     let msg = json!({ "type": "passwords.reveal", "id": id, "password": c.password });
