@@ -62,7 +62,7 @@ pub fn command(vk: u32, m: Mods, in_address: bool) -> Option<Cmd> {
         (true, false, false, Some('J'), _) => Cmd::Downloads,
         (true, false, false, Some('T'), _) => Cmd::NewTab,
         (true, false, false, Some('W'), _) | (true, false, false, _, VK_F4) => Cmd::CloseTab,
-        (true, false, false, Some('L'), _) | (false, false, true, Some('D'), _) => Cmd::FocusAddress,
+        (true, false, false, Some('L' | 'K' | 'E'), _) | (false, false, true, Some('D'), _) => Cmd::FocusAddress,
         (true, false, false, _, VK_TAB) => Cmd::NextTab,
         (true, true, false, _, VK_TAB) => Cmd::PrevTab,
         (true, false, false, Some('9'), _) => Cmd::LastTab,

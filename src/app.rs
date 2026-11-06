@@ -343,7 +343,9 @@ pub struct App {
     download_owner: HashMap<u32, u32>,
     lingering: Vec<(u32, ICoreWebView2Controller)>,
     ram_line: String,
+    asleep_count: usize,
     mascot: Option<Rc<Image>>,
+    sleeping_mascot: Option<Rc<Image>>,
 }
 
 // ---------- Uygulama durumuna erişim ----------
@@ -661,6 +663,7 @@ impl App {
     fn new(hwnd: HWND, edit: HWND, start_edit: HWND) -> Result<Self> {
         let dpi = unsafe { GetDpiForWindow(hwnd) }.max(96);
         let state = state::load();
+        set_accent(&state.settings.accent);
         // Arayüz her zaman CPU ile çizilir: küçük bir alan için GPU cihazı açmak
         // onlarca MB ekler. "Donanım hızlandırma" ayarı sayfaların motoruna uygulanır.
         let mut gfx = Gfx::new()?;
@@ -734,6 +737,8 @@ impl App {
             download_owner: HashMap::new(),
             lingering: Vec::new(),
             ram_line: String::new(),
+            asleep_count: 0,
+            sleeping_mascot: crate::image::from_bytes(include_bytes!("../Assets/mascot-sleeping.png"), 250).map(Rc::new),
             mascot: crate::image::from_bytes(include_bytes!("../Assets/mascot-question.png"), 260).map(Rc::new),
         };
         app.vault = crate::passwords::Vault::load(&app.state.current_profile);
@@ -1673,6 +1678,10 @@ impl App {
                 self.focus_content();
                 Some(LRESULT(0))
             }
+            WM_TIMER => {
+                menu.fade_step();
+                Some(LRESULT(0))
+            }
             WM_ACTIVATE if (wparam.0 & 0xFFFF) as u32 == WA_INACTIVE => {
                 self.close_menu();
                 Some(LRESULT(0))
@@ -2395,7 +2404,7 @@ impl App {
             }
             g.text("Sayfa açılamadı", Rect::new(cx, cy - 40.0, l.content.w, 28.0), Font::UiBold, INK, Align::Center);
             g.text(err, Rect::new(cx, cy - 10.0, l.content.w, 24.0), Font::Ui, MUTED, Align::Center);
-            g.round(l.retry, 10.0, if self.hover == Hit::Retry { INK } else { ACCENT });
+            g.round(l.retry, 10.0, if self.hover == Hit::Retry { INK } else { accent() });
             g.text("Yeniden dene", l.retry, Font::Ui, BASE, Align::Center);
         } else if tab.ctrl.is_none() {
             // Görünüm hazırlanırken boş kart.
@@ -2408,11 +2417,11 @@ impl App {
         let g = &self.gfx;
         if loading {
             let turn = self.t0.elapsed().as_secs_f32() / 0.9;
-            g.spinner(badge.cx(), badge.cy(), 6.5, turn.fract(), ACCENT, 2.0);
+            g.spinner(badge.cx(), badge.cy(), 6.5, turn.fract(), accent(), 2.0);
         } else if let Some(img) = icon {
             g.image(img, badge, false);
         } else {
-            g.round(badge, 5.0, if private { ACCENT } else if active { LINE } else { HOVER });
+            g.round(badge, 5.0, if private { accent() } else if active { LINE } else { HOVER });
             let letter: String = label.chars().next().map(|c| c.to_uppercase().collect()).unwrap_or_default();
             g.text(&letter, badge, Font::Small, if private { BASE } else if dim { FAINT } else { INK }, Align::Center);
         }
@@ -2425,7 +2434,7 @@ impl App {
         if active {
             g.round(r, 8.0, RAISED);
             if private {
-                g.round_outline_alpha(r, 8.0, ACCENT, 1.0, 0.6);
+                g.round_outline_alpha(r, 8.0, accent(), 1.0, 0.6);
             }
         } else if hovered {
             g.round(r, 8.0, HOVER);
@@ -2522,11 +2531,11 @@ impl App {
         // Adres çubuğu
         let focused = unsafe { GetFocus() } == self.edit;
         g.round(l.address, 10.0, RAISED);
-        g.round_outline(l.address, 10.0, if focused { ACCENT } else { LINE }, if focused { 1.5 } else { 1.0 });
+        g.round_outline(l.address, 10.0, if focused { accent() } else { LINE }, if focused { 1.5 } else { 1.0 });
         let mut x = l.address.x + 8.0;
         if tab.private {
             let pill = Rect::new(x, l.address.cy() - 10.0, 52.0, 20.0);
-            g.round(pill, 10.0, ACCENT);
+            g.round(pill, 10.0, accent());
             g.text("Gizli", pill, Font::Small, BASE, Align::Center);
             x = pill.right() + 4.0;
         } else {
@@ -2545,7 +2554,7 @@ impl App {
                 g.round(l.star, 6.0, HOVER);
             }
             let starred = self.is_bookmarked(&tab.url);
-            g.text(if starred { ICON_STAR_FILLED } else { ICON_STAR }, l.star, Font::MidIcon, if starred { ACCENT } else { MUTED }, Align::Center);
+            g.text(if starred { ICON_STAR_FILLED } else { ICON_STAR }, l.star, Font::MidIcon, if starred { accent() } else { MUTED }, Align::Center);
         }
         if let (Some(r), Some(label)) = (l.zoom_pill, self.zoom_label()) {
             g.round(r, 11.0, if self.hover == Hit::ZoomPill { LINE } else { HOVER });
@@ -2558,7 +2567,7 @@ impl App {
             } else if installed {
                 (HOVER, MUTED, "Eklendi ✓")
             } else {
-                (if self.hover == Hit::AddExtension { INK } else { ACCENT }, BASE, "Sqywein'e ekle")
+                (if self.hover == Hit::AddExtension { INK } else { accent() }, BASE, "Sqywein'e ekle")
             };
             g.round(r, 12.0, bg);
             g.text(text, r, Font::Small, fg, Align::Center);
@@ -2571,14 +2580,14 @@ impl App {
                 // Bitti: iki kez yavaşça parlayıp söner.
                 let wave = 0.5 - 0.5 * (t * std::f32::consts::TAU / 1.2).cos();
                 let fade = 1.0 - t / 2.4;
-                g.glow(r.cx(), r.cy(), 26.0, 26.0, ACCENT, 0.55 * wave * fade);
-                g.round_alpha(r, 8.0, ACCENT, 0.25 * wave * fade);
+                g.glow(r.cx(), r.cy(), 26.0, 26.0, accent(), 0.55 * wave * fade);
+                g.round_alpha(r, 8.0, accent(), 0.25 * wave * fade);
             }
             self.tool_button(r, Hit::Downloads, open);
             if let Some(p) = self.download_progress() {
                 // İlerledikçe dolan halka (saat 12'den başlar).
                 g.arc(r.cx(), r.cy(), 13.0, 0.75, 0.999, LINE, 2.5);
-                g.arc(r.cx(), r.cy(), 13.0, 0.75, p.max(0.03), ACCENT, 2.5);
+                g.arc(r.cx(), r.cy(), 13.0, 0.75, p.max(0.03), accent(), 2.5);
             }
             g.text(ICON_DOWNLOAD, r, Font::Icon, INK, Align::Center);
         }

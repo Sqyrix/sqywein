@@ -246,8 +246,15 @@ pub fn configure(ctrl: &ICoreWebView2Controller, id: u32, background: u32, prefs
                 let mut uri = PWSTR::null();
                 request.Uri(&mut uri)?;
                 let uri = take_pwstr(uri);
+                let themed;
                 let (status, reason, body, mime) = if url::is_internal(&uri) {
                     match ui::file(&uri) {
+                        // Ortak stil dosyası seçili vurgu rengiyle sunulur.
+                        Some((body, mime)) if mime == "text/css" => {
+                            let accent = crate::theme::hex(crate::theme::accent());
+                            themed = String::from_utf8_lossy(body).replace("#AF85FC", &accent);
+                            (200, "OK", themed.as_bytes(), mime)
+                        }
                         Some((body, mime)) => (200, "OK", body, mime),
                         None => (404, "Not Found", &b"Bulunamadi"[..], "text/plain"),
                     }

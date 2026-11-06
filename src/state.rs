@@ -46,6 +46,8 @@ pub struct Settings {
     pub adblock: bool,
     /// Varsayılan filtreleme modu: 0 Kapalı, 1 Temel, 2 İdeal, 3 Tam.
     pub adblock_level: u8,
+    /// Vurgu rengi: purple, blue, green, orange, pink, teal.
+    pub accent: String,
 }
 
 impl Default for Settings {
@@ -65,6 +67,7 @@ impl Default for Settings {
             search_suggestions: true,
             adblock: true,
             adblock_level: 2,
+            accent: "purple".into(),
         }
     }
 }

@@ -163,10 +163,22 @@ impl App {
         let private = self.tabs[self.active].private;
         let s = self.start_layout(l.content);
         g.round(l.content, 10.0, RAISED);
-        g.glow(l.content.cx(), s.logo.cy() + 20.0, 280.0, 120.0, ACCENT, if private { 0.16 } else { 0.10 });
-        match &self.logo {
-            Some(img) => g.image(img, s.logo, false),
-            None => g.circle(s.logo.cx(), s.logo.cy(), 30.0, ACCENT),
+        g.glow(l.content.cx(), s.logo.cy() + 20.0, 280.0, 120.0, accent(), if private { 0.16 } else { 0.10 });
+        // Sekmeler uyurken kedi de uyur: Sqywein'in hafifliğinin görünür hali.
+        match (&self.sleeping_mascot, &self.logo) {
+            (Some(cat), _) if self.asleep_count > 0 && !private => {
+                let h = 70.0;
+                let w = h * cat.width as f32 / cat.height as f32;
+                let r = Rect::new(s.logo.cx() - w / 2.0, s.logo.bottom() - h, w, h);
+                g.image(cat, r, false);
+                for (k, (dx, dy, size)) in [(0.66, -0.05, 10.0), (0.76, -0.22, 13.0), (0.88, -0.42, 16.0)].iter().enumerate() {
+                    let z = Rect::new(r.x + r.w * dx, r.y + r.h * dy, 24.0, 24.0);
+                    let _ = k;
+                    g.text("z", z, if *size > 12.0 { Font::UiBold } else { Font::Small }, accent(), Align::Left);
+                }
+            }
+            (_, Some(img)) => g.image(img, s.logo, false),
+            _ => g.circle(s.logo.cx(), s.logo.cy(), 30.0, accent()),
         }
         g.text(if private { "Gizli sekme" } else { "Sqywein" }, s.title, Font::Big, INK, Align::Center);
         if !private && !self.ram_line.is_empty() {
@@ -178,12 +190,12 @@ impl App {
         let focused = unsafe { GetFocus() } == self.start_edit;
         if focused {
             // Odaktayken vurgu renginde yumuşak bir hale.
-            g.round_outline_alpha(r.inset(-5.0, -5.0), 31.0, ACCENT, 5.0, 0.07);
-            g.round_outline_alpha(r.inset(-2.5, -2.5), 29.0, ACCENT, 3.0, 0.14);
+            g.round_outline_alpha(r.inset(-5.0, -5.0), 31.0, accent(), 5.0, 0.07);
+            g.round_outline_alpha(r.inset(-2.5, -2.5), 29.0, accent(), 3.0, 0.14);
         }
         g.round(r, 27.0, SEARCH);
-        g.round_outline(r, 27.0, if focused { ACCENT } else { LINE }, if focused { 1.5 } else { 1.0 });
-        g.text(ICON_SEARCH, Rect::new(r.x + 18.0, r.y, 26.0, r.h), Font::Icon, if focused { ACCENT } else { MUTED }, Align::Center);
+        g.round_outline(r, 27.0, if focused { accent() } else { LINE }, if focused { 1.5 } else { 1.0 });
+        g.text(ICON_SEARCH, Rect::new(r.x + 18.0, r.y, 26.0, r.h), Font::Icon, if focused { accent() } else { MUTED }, Align::Center);
 
         if private {
             g.text("Geçmiş ve çerezler bu sekme kapanınca silinir.", Rect::new(l.content.x, r.bottom() + 24.0, l.content.w, 20.0), Font::Small, FAINT, Align::Center);
@@ -220,7 +232,7 @@ impl App {
         } else {
             match icon {
                 Some(img) => g.image(img, inner, false),
-                None => menu::avatar(g, inner, None, ACCENT, label),
+                None => menu::avatar(g, inner, None, accent(), label),
             }
         }
         g.text(label, Rect::new(t.x + 8.0, t.y + 66.0, t.w - 16.0, 20.0), Font::Small, INK, Align::Center);
@@ -437,12 +449,12 @@ impl App {
         let (f1, f2) = dialog_fields();
         for (f, e) in [(f1, d.name), (f2, d.url)] {
             g.round(f, 10.0, SEARCH);
-            g.round_outline(f, 10.0, if focus == e { ACCENT } else { LINE }, if focus == e { 1.5 } else { 1.0 });
+            g.round_outline(f, 10.0, if focus == e { accent() } else { LINE }, if focus == e { 1.5 } else { 1.0 });
         }
         let (cancel, save) = dialog_buttons();
         g.round(cancel, 10.0, if d.hover == 1 { LINE } else { HOVER });
         g.text("İptal", cancel, Font::Ui, INK, Align::Center);
-        g.round(save, 10.0, if d.hover == 2 { INK } else { ACCENT });
+        g.round(save, 10.0, if d.hover == 2 { INK } else { accent() });
         g.text("Ekle", save, Font::Ui, BASE, Align::Center);
         d.gfx.end();
     }

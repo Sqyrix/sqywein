@@ -9,7 +9,38 @@ pub const LINE: Rgb = 0x3D3654;
 pub const INK: Rgb = 0xF4F1FC;
 pub const MUTED: Rgb = 0xB8AED0;
 pub const FAINT: Rgb = 0x8E84A8;
-pub const ACCENT: Rgb = 0xAF85FC;
+/// Sqywein'in varsayılan vurgu rengi (mor).
+pub const DEFAULT_ACCENT: Rgb = 0xAF85FC;
+
+/// Seçilebilir vurgu renkleri: (ayar adı, görünen ad, renk).
+pub const ACCENTS: [(&str, &str, Rgb); 6] = [
+    ("purple", "Mor", 0xAF85FC),
+    ("blue", "Mavi", 0x6EA8FE),
+    ("green", "Yeşil", 0x5FD39A),
+    ("orange", "Turuncu", 0xFFA45C),
+    ("pink", "Pembe", 0xF28AC9),
+    ("teal", "Turkuaz", 0x4FD1D9),
+];
+
+thread_local! {
+    static CURRENT_ACCENT: std::cell::Cell<Rgb> = const { std::cell::Cell::new(DEFAULT_ACCENT) };
+}
+
+/// Kullanıcının seçtiği vurgu rengi; arayüzün her yerinde bu kullanılır.
+pub fn accent() -> Rgb {
+    CURRENT_ACCENT.with(|c| c.get())
+}
+
+/// Ayar adından ("blue" vb.) vurgu rengini uygular; bilinmeyen ad mor olur.
+pub fn set_accent(name: &str) {
+    let rgb = ACCENTS.iter().find(|(n, ..)| *n == name).map_or(DEFAULT_ACCENT, |(_, _, c)| *c);
+    CURRENT_ACCENT.with(|c| c.set(rgb));
+}
+
+/// "#RRGGBB" biçimi (iç sayfaların CSS'i için).
+pub fn hex(rgb: Rgb) -> String {
+    format!("#{rgb:06X}")
+}
 pub const DANGER: Rgb = 0xC42B1C;
 /// Ana sayfadaki arama kutusu: kartın bir ton üstü.
 pub const SEARCH: Rgb = 0x2A2540;

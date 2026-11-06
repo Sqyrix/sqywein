@@ -384,6 +384,7 @@ impl App {
         }
         let mb = crate::memory::total(pids) / (1024 * 1024);
         let asleep = self.tabs.iter().filter(|t| !t.url.is_empty() && (t.ctrl.is_none() || t.mem == Mem::Dozing)).count();
+        self.asleep_count = asleep;
         let line = if asleep > 0 { format!("Şu an {mb} MB kullanıyor · {asleep} sekme uyuyor") } else { format!("Şu an {mb} MB kullanıyor") };
         if line != self.ram_line {
             self.ram_line = line;

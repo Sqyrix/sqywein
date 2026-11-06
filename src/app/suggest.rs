@@ -18,6 +18,39 @@ enum Kind {
     Url,
     History,
     Bookmark,
+    /// Açık bir sekmeye geç (kimliği).
+    Tab(u32),
+    /// Tarayıcı komutu (komut tablosundaki sırası).
+    Command(usize),
+}
+
+/// Adres çubuğundan çalıştırılabilen komutlar: (simge, ad, anahtar sözcükler).
+const COMMANDS: [(&str, &str, &str); 10] = [
+    ("\u{E713}", "Ayarlar", "ayar settings seçenek tercih"),
+    ("\u{E81C}", "Geçmiş", "geçmiş gecmis history"),
+    ("\u{E896}", "İndirmeler", "indir indirme download"),
+    ("\u{E734}", "Yer işaretleri", "yer işaret favori bookmark"),
+    ("\u{E8D7}", "Şifreler", "şifre sifre parola password"),
+    ("\u{EA86}", "Uzantılar", "uzantı uzanti eklenti extension"),
+    ("\u{E727}", "Yeni gizli sekme", "gizli incognito private"),
+    ("\u{E7A7}", "Kapatılan sekmeyi geri aç", "geri aç kapatılan reopen"),
+    ("\u{E735}", "Bu sayfayı yer işaretlerine ekle", "yıldız yildiz ekle kaydet bookmark"),
+    ("\u{EC7A}", "Geliştirici araçları", "geliştirici gelistirici devtools konsol"),
+];
+
+/// Türkçe büyük/küçük harf ve aksan farkı gözetmeden karşılaştırma için.
+fn fold(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            'İ' | 'I' | 'ı' => 'i',
+            'Ş' | 'ş' => 's',
+            'Ğ' | 'ğ' => 'g',
+            'Ü' | 'ü' => 'u',
+            'Ö' | 'ö' => 'o',
+            'Ç' | 'ç' => 'c',
+            c => c.to_ascii_lowercase(),
+        })
+        .collect()
 }
 
 #[derive(Clone)]
@@ -74,6 +107,27 @@ impl App {
         } else {
             Row { kind: Kind::Url, text: typed.clone(), url: target }
         }];
+        // Açık sekmeler ve komutlar: yazılan en az iki harfse aranır.
+        let q = fold(&typed);
+        if q.chars().count() >= 2 {
+            for t in self.tabs.iter().filter(|t| t.id != self.tabs[self.active].id && !t.url.is_empty()) {
+                if rows.iter().filter(|r| matches!(r.kind, Kind::Tab(_))).count() >= 2 {
+                    break;
+                }
+                if fold(&t.label()).contains(&q) || fold(&t.url).contains(&q) {
+                    rows.push(Row { kind: Kind::Tab(t.id), text: t.label(), url: t.url.clone() });
+                }
+            }
+            for (k, (_, name, words)) in COMMANDS.iter().enumerate() {
+                if rows.iter().filter(|r| matches!(r.kind, Kind::Command(_))).count() >= 2 {
+                    break;
+                }
+                let hay = fold(&format!("{name} {words}"));
+                if hay.split_whitespace().any(|w| w.starts_with(&q)) || fold(name).contains(&q) {
+                    rows.push(Row { kind: Kind::Command(k), text: name.to_string(), url: String::new() });
+                }
+            }
+        }
         let favorites: Vec<Favorite> = self.state.favorites.iter().map(|b| Favorite { title: b.title.clone(), url: b.url.clone() }).collect();
         for s in self.history.suggest(&typed, &favorites, "", 5) {
             if rows.iter().any(|r| r.url == s.url) {
@@ -198,7 +252,32 @@ impl App {
 
     fn open_row(&mut self, row: Row) {
         self.close_suggest();
-        self.navigate(&row.url);
+        match row.kind {
+            Kind::Tab(id) => {
+                if let Some(i) = self.index_of(id) {
+                    let current = self.tabs[self.active].url.clone();
+                    Self::set_text(self.edit, &url::display(&current));
+                    self.activate(i);
+                }
+            }
+            Kind::Command(k) => {
+                let current = self.tabs[self.active].url.clone();
+                Self::set_text(self.edit, &url::display(&current));
+                match k {
+                    0 => self.open_page("settings"),
+                    1 => self.open_page("history"),
+                    2 => self.open_page("downloads"),
+                    3 => self.open_page("bookmarks"),
+                    4 => self.open_page("passwords"),
+                    5 => self.open_page("extensions"),
+                    6 => self.new_private_tab(),
+                    7 => self.run(Cmd::ReopenTab),
+                    8 => self.run(Cmd::Bookmark),
+                    _ => self.run(Cmd::DevTools),
+                }
+            }
+            _ => self.navigate(&row.url),
+        }
     }
 
     fn suggest_row_at(&self, lparam: LPARAM) -> Option<usize> {
@@ -246,7 +325,16 @@ impl App {
         let icons: Vec<Option<Rc<Image>>> = self
             .suggest
             .as_ref()
-            .map(|sg| sg.rows.iter().map(|r| if matches!(r.kind, Kind::History | Kind::Bookmark) { self.icon_for(&r.url) } else { None }).collect())
+            .map(|sg| {
+                sg.rows
+                    .iter()
+                    .map(|r| match r.kind {
+                        Kind::History | Kind::Bookmark => self.icon_for(&r.url),
+                        Kind::Tab(id) => self.index_of(id).and_then(|i| self.tabs[i].icon.clone()).or_else(|| self.icon_for(&r.url)),
+                        _ => None,
+                    })
+                    .collect()
+            })
             .unwrap_or_default();
         let Some(sg) = &mut self.suggest else { return };
         let h = sg.rows.len() as f32 * ROW_H + 12.0;
@@ -271,7 +359,8 @@ impl App {
             match (&icons.get(i).cloned().flatten(), row.kind) {
                 (Some(img), _) => g.image(img, icon, false),
                 (None, Kind::Search) => g.text(ICON_SEARCH, icon, Font::MidIcon, MUTED, Align::Center),
-                (None, Kind::Bookmark) => g.text(ICON_STAR_FILLED, icon, Font::MidIcon, ACCENT, Align::Center),
+                (None, Kind::Bookmark) => g.text(ICON_STAR_FILLED, icon, Font::MidIcon, accent(), Align::Center),
+                (None, Kind::Command(k)) => g.text(COMMANDS[k].0, icon, Font::MidIcon, accent(), Align::Center),
                 (None, _) => g.text(ICON_GLOBE, icon, Font::MidIcon, MUTED, Align::Center),
             }
             let x = icon.right() + 12.0;
@@ -279,6 +368,12 @@ impl App {
             match row.kind {
                 Kind::Search | Kind::Url => {
                     g.text(&row.text, Rect::new(x, r.y, avail, r.h), Font::Ui, INK, Align::Left);
+                }
+                Kind::Tab(_) | Kind::Command(_) => {
+                    let tw = g.measure(&row.text, Font::Ui).min(avail * 0.7);
+                    g.text(&row.text, Rect::new(x, r.y, tw + 2.0, r.h), Font::Ui, INK, Align::Left);
+                    let hint = if matches!(row.kind, Kind::Tab(_)) { "— Sekmeye geç" } else { "— Komut" };
+                    g.text(hint, Rect::new(x + tw + 8.0, r.y, (avail - tw - 8.0).max(0.0), r.h), Font::Small, accent(), Align::Left);
                 }
                 Kind::History | Kind::Bookmark => {
                     let title = if row.text.is_empty() { url::display(&row.url) } else { row.text.clone() };
@@ -290,5 +385,18 @@ impl App {
             }
         }
         sg.gfx.end();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn turkce_katlama_ve_komutlar() {
+        assert_eq!(fold("Şifreler"), "sifreler");
+        assert_eq!(fold("İNDİRMELER"), "indirmeler");
+        let q = fold("şifr");
+        assert!(COMMANDS.iter().any(|(_, n, w)| fold(&format!("{n} {w}")).split_whitespace().any(|x| x.starts_with(&q))));
     }
 }

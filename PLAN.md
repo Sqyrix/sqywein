@@ -13,6 +13,14 @@ Sıra: **1) motor ve Rust'a tam geçiş → 2) adblock → 3) Sqywein tasarımı
 
 Rust sürümünün kabuk hedefi: **boşta < 10 MB**, soğuk açılış **< 150 ms** (pencere görünene kadar).
 
+## Durum (7 Kasım 2026)
+
+- **Faz 1-2 (motor, Rust'a geçiş, eşitlik):** tamam. C# sürümü kaldırıldı.
+- **Faz 3 (reklam engelleyici):** tamam. Ağ + kozmetik + YouTube modülü, Kapalı/Temel/İdeal/Tam modları.
+- **Faz 4 (tasarım):** ilk tur tamam: vurgu rengi seçimi, Ctrl+K komut paleti (sekmeye geç, komutlar),
+  uyuyan kedi, menü açılış animasyonu, maskotlu hata sayfası. Sırada: açık tema, dikey sekmeler.
+- **Faz 5 (paketleme):** başlanmadı.
+
 ## Performans (7 Kasım 2026, Rust sürümü ile C# sürümü)
 
 Toplam = kabuk + motorun tüm süreçleri (özel çalışma kümesi). Açılış = pencerenin görünmesi.

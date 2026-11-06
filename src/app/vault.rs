@@ -98,7 +98,7 @@ impl App {
         let title = if p.update { "Şifre güncellensin mi?" } else { "Şifre kaydedilsin mi?" };
         let who = if p.username.is_empty() { host.clone() } else { format!("{} · {host}", p.username) };
         vec![
-            Item::Header(menu::Header { title: title.into(), sub: who, avatar: self.icon_for(&p.url), color: ACCENT }),
+            Item::Header(menu::Header { title: title.into(), sub: who, avatar: self.icon_for(&p.url), color: accent() }),
             Item::act(if p.update { "Güncelle" } else { "Kaydet" }, "", MenuCmd::SavePassword),
             Item::act("Bu sitede asla", "", MenuCmd::NeverSavePassword),
             Item::act("Şimdi değil", "", MenuCmd::DismissPassword),

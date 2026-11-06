@@ -221,7 +221,7 @@ impl App {
                 title: "Reklam engelleyici kapalı".into(),
                 sub: "Ayarlardan açabilirsin".into(),
                 avatar: self.logo.clone(),
-                color: ACCENT,
+                color: accent(),
             }));
         }
         items.push(Item::Sep);
@@ -236,7 +236,7 @@ impl App {
             g.round(r, 6.0, HOVER);
         }
         let icon = Rect::new(r.x, r.y, 28.0, r.h);
-        g.text(ICON_SHIELD, icon, Font::MidIcon, if on { ACCENT } else { FAINT }, Align::Center);
+        g.text(ICON_SHIELD, icon, Font::MidIcon, if on { accent() } else { FAINT }, Align::Center);
         let n = self.shield_count();
         if on && n > 0 {
             g.text(&n.to_string(), Rect::new(icon.right() - 4.0, r.y, r.w - 24.0, r.h), Font::Small, MUTED, Align::Left);

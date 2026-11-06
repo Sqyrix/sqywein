@@ -223,6 +223,22 @@ impl App {
             "sleepTabs" => st.sleep_tabs = b,
             "hardwareAcceleration" => st.hardware_acceleration = b, // Yeniden başlatınca geçerli.
             "searchSuggestions" => st.search_suggestions = b,
+            "accent" => {
+                st.accent = text;
+                set_accent(&st.accent);
+                // Açık iç sayfalar yeniden yüklenmeden yeni renge geçer.
+                let msg = json!({ "type": "theme", "accent": hex(accent()) }).to_string();
+                for t in &self.tabs {
+                    if url::is_internal(&t.url) {
+                        if let Some(v) = &t.view {
+                            engine::post_json(v, &msg);
+                        }
+                    }
+                }
+                if let Some(m) = &self.menu {
+                    unsafe { let _ = InvalidateRect(Some(m.hwnd), None, false); }
+                }
+            }
             "adblock" => {
                 self.set_adblock_enabled(b);
                 return;

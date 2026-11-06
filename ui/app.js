@@ -1,6 +1,8 @@
 'use strict';
 const bridge = window.chrome && window.chrome.webview;
 const handlers = new Map();
+// Vurgu rengi ayarlardan değişince sayfa yeniden yüklenmeden güncellenir.
+setTimeout(() => on('theme', d => { if (typeof d.accent === 'string' && /^#[0-9A-F]{6}$/i.test(d.accent)) document.documentElement.style.setProperty('--accent', d.accent); }), 0);
 function on(type, handler) {
   if (!handlers.has(type)) handlers.set(type, new Set());
   handlers.get(type).add(handler);

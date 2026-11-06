@@ -158,11 +158,16 @@ pub struct Menu {
     pub zoom: Option<f64>,
     dpi: u32,
     size: (u32, u32),
+    /// Açılış animasyonu: başladığı an ve hedef konum (ekran pikseli).
+    fade: Option<(std::time::Instant, POINT)>,
 }
+
+const FADE_MS: f32 = 140.0;
+const FADE_TIMER: usize = 1;
 
 /// Profil rengi "#AF85FC" → 0xAF85FC.
 pub fn parse_color(hex: &str) -> Rgb {
-    u32::from_str_radix(hex.trim_start_matches('#'), 16).unwrap_or(ACCENT)
+    u32::from_str_radix(hex.trim_start_matches('#'), 16).unwrap_or(accent())
 }
 
 /// Yuvarlak avatar: fotoğraf varsa o, yoksa renkli daire içinde baş harf.
@@ -186,8 +191,9 @@ impl Menu {
         let (wpx, hpx) = ((MENU_WIDTH * s).round() as i32, (h * s).round() as i32);
         unsafe {
             let instance: HINSTANCE = GetModuleHandleW(None)?.into();
+            // Katmanlı pencere: açılırken saydamlıktan netliğe geçer.
             let hwnd = CreateWindowExW(
-                WS_EX_TOOLWINDOW,
+                WS_EX_TOOLWINDOW | WS_EX_LAYERED,
                 CLASS,
                 w!(""),
                 WS_POPUP,
@@ -204,10 +210,14 @@ impl Menu {
             let _ = DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark as *const _ as _, 4);
             let corner = DWMWCP_ROUND;
             let _ = DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &corner as *const _ as _, 4);
+            let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 0, LWA_ALPHA);
+            let target = POINT { x: anchor.x - wpx, y: anchor.y };
+            let _ = SetWindowPos(hwnd, None, target.x, target.y - (6.0 * s) as i32, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+            SetTimer(Some(hwnd), FADE_TIMER, 10, None);
             let mut gfx = Gfx::new()?;
             gfx.hardware = hardware;
             gfx.set_dpi(dpi);
-            Ok(Self { hwnd, kind, gfx, items, hover: None, zoom, dpi, size: (wpx as u32, hpx as u32) })
+            Ok(Self { hwnd, kind, gfx, items, hover: None, zoom, dpi, size: (wpx as u32, hpx as u32), fade: Some((std::time::Instant::now(), target)) })
         }
     }
 
@@ -309,6 +319,23 @@ impl Menu {
         }
     }
 
+    /// Açılış animasyonunun bir adımı (menü zamanlayıcısından çağrılır).
+    pub fn fade_step(&mut self) {
+        let Some((start, target)) = self.fade else { return };
+        let t = (start.elapsed().as_secs_f32() * 1000.0 / FADE_MS).min(1.0);
+        let e = ease_out(t);
+        let s = self.dpi as f32 / 96.0;
+        unsafe {
+            let _ = SetLayeredWindowAttributes(self.hwnd, COLORREF(0), (e * 255.0) as u8, LWA_ALPHA);
+            let y = target.y - ((1.0 - e) * 6.0 * s) as i32;
+            let _ = SetWindowPos(self.hwnd, None, target.x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+            if t >= 1.0 {
+                let _ = KillTimer(Some(self.hwnd), FADE_TIMER);
+                self.fade = None;
+            }
+        }
+    }
+
     /// Menü açıkken içeriği değişti (ör. uzantı sabitlendi).
     pub fn set_items(&mut self, items: Vec<Item>) {
         self.items = items;
@@ -375,7 +402,7 @@ impl Menu {
                     for n in 0..3u8 {
                         let seg = Rect::new(at(n) + 1.0, cy - 7.0, step - 2.0, 14.0);
                         let filled = n < *level;
-                        g.round_alpha(seg, 4.0, if filled { ACCENT } else { LINE }, if filled { 0.85 } else { 1.0 });
+                        g.round_alpha(seg, 4.0, if filled { accent() } else { LINE }, if filled { 0.85 } else { 1.0 });
                     }
                     for n in 0..=3u8 {
                         if self.hover == Some(Part::Level(n)) && n != *level {
@@ -383,10 +410,10 @@ impl Menu {
                         }
                     }
                     let knob = Rect::new(at(*level) - 22.0, cy - 22.0, 44.0, 44.0);
-                    g.round(knob, 12.0, ACCENT);
+                    g.round(knob, 12.0, accent());
                     g.text("filtreleme modu", Rect::new(r.x, cy + 28.0, r.w, 18.0), Font::Small, MUTED, Align::Center);
                     let name = crate::adblock::LEVEL_NAMES[*level as usize];
-                    g.text(name, Rect::new(r.x, cy + 46.0, r.w, 20.0), Font::UiBold, ACCENT, Align::Center);
+                    g.text(name, Rect::new(r.x, cy + 46.0, r.w, 20.0), Font::UiBold, accent(), Align::Center);
                 }
                 Item::Download(d) => {
                     if self.hover == Some(Part::Row(i)) && d.done {
@@ -401,7 +428,7 @@ impl Menu {
                             g.set_opacity(1.0);
                         }
                         None => {
-                            g.round(icon, 8.0, if d.done { ACCENT } else { HOVER });
+                            g.round(icon, 8.0, if d.done { accent() } else { HOVER });
                             g.text(ICON_DOC, icon, Font::Icon, if d.done { BASE } else { INK }, Align::Center);
                         }
                     }
@@ -412,7 +439,7 @@ impl Menu {
                     if let Some(p) = d.progress {
                         let bar = Rect::new(tx, r.y + 50.0, tw, 3.0);
                         g.round(bar, 1.5, LINE);
-                        g.round(Rect::new(bar.x, bar.y, (bar.w * p.clamp(0.0, 1.0)).max(3.0), bar.h), 1.5, ACCENT);
+                        g.round(Rect::new(bar.x, bar.y, (bar.w * p.clamp(0.0, 1.0)).max(3.0), bar.h), 1.5, accent());
                     }
                     let side = Rect::new(r.right() - 48.0, r.cy() - 16.0, 32.0, 32.0);
                     if self.hover == Some(Part::Side(i)) {
@@ -468,6 +495,6 @@ mod tests {
     #[test]
     fn renk_cozme() {
         assert_eq!(parse_color("#AF85FC"), 0xAF85FC);
-        assert_eq!(parse_color("bozuk"), ACCENT);
+        assert_eq!(parse_color("bozuk"), accent());
     }
 }
