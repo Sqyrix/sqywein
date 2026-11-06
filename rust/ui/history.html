@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self'; img-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'"><title>Geçmiş</title><link rel="stylesheet" href="/app.css"><script src="/app.js"></script></head>
+<body><main class="main" id="main" tabindex="-1"><div class="content"><h1>Geçmiş</h1><p class="subtitle">Kaldığın yeri yeniden bul.</p><div class="toolbar"><label class="search"><span class="sr-only">Geçmişte ara</span><input id="search" type="search" placeholder="Geçmişte ara" autocomplete="off"></label><button id="clear" type="button">Geçmişi temizle</button></div><div id="results" aria-busy="true"><p class="loading" role="status">Geçmiş yükleniyor…</p></div><p id="count" class="count" role="status"></p></div></main>
+<script>
+'use strict';
+initPage('history');
+const results=document.getElementById('results');
+const search=document.getElementById('search');
+let requestedQuery='';
+function loadHistory(){requestedQuery=search.value.trim();results.setAttribute('aria-busy','true');send('history.list',{query:requestedQuery,limit:500});}
+on('history.list',message => {
+  const restoreFocus=rememberFocus(results);
+  const items=[...(message.items || [])].sort((a,b) => (Date.parse(b.when)||0)-(Date.parse(a.when)||0));
+  results.replaceChildren();results.setAttribute('aria-busy','false');
+  document.getElementById('count').textContent=items.length ? `${items.length} kayıt${items.length===500 ? ' · En yeni 500 sonuç gösteriliyor' : ''}` : '';
+  if(!items.length){empty(results,requestedQuery ? 'Sonuç bulunamadı' : 'Henüz bir iz yok',requestedQuery ? 'Başka bir kelime ya da adres dene.' : 'Ziyaret ettiğin sayfalar burada görünecek.');restoreFocus();return;}
+  const groups=new Map();
+  for(const item of items){const date=dateValue(item.when);const key=date ? date.toDateString() : 'unknown';if(!groups.has(key))groups.set(key,[]);groups.get(key).push(item);}
+  for(const group of groups.values()){
+    const heading=el('h2',{class:'day'},dayLabel(group[0].when));const list=el('div',{class:'card list',role:'list','aria-label':heading.textContent});
+    for(const item of group){const date=dateValue(item.when);list.append(el('div',{class:'row',role:'listitem','data-url':item.url},el('time',{class:'time',...(date ? {datetime:date.toISOString()} : {})},date ? date.toLocaleTimeString('tr-TR',{hour:'2-digit',minute:'2-digit'}) : '—'),badge(item.title || host(item.url)),el('div',{class:'row-main'},openLink(item.title,item.url),el('div',{class:'detail'},host(item.url))),action(`${item.title || host(item.url)} kaydını sil`,() => send('history.remove',{url:item.url}),'delete')));}
+    results.append(heading,list);
+  }
+  restoreFocus();
+});
+search.addEventListener('input',debounce(loadHistory));
+document.getElementById('clear').addEventListener('click',event => confirmInline(event.currentTarget,'Tüm tarama geçmişi silinsin mi?',() => send('history.clear')));
+loadHistory();
+</script></body></html>

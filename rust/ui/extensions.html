@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self'; img-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'"><title>Uzantılar</title><link rel="stylesheet" href="/app.css"><script src="/app.js"></script></head>
+<body><main class="main" id="main" tabindex="-1"><div class="content"><h1>Uzantılar</h1><p class="subtitle">Tarayıcını sana göre genişlet.</p><div class="page-actions"><button id="store" type="button">Chrome Web Mağazası'nı aç</button><button id="load" type="button">Paketlenmemiş uzantı yükle</button></div><div class="card note"><p>Sqywein, Chrome Web Mağazası'ndaki çoğu uzantıyı çalıştırır. Yan panel kullanan uzantılar (ör. bazı yapay zekâ asistanları) henüz desteklenmiyor.</p><p>Mağazada bir uzantının sayfasını aç, adres çubuğundaki 'Sqywein'e ekle' düğmesine bas.</p></div><p id="unsupported" class="card" role="status" hidden>Bu WebView2 sürümü uzantıları desteklemiyor. Uzantıları yönetmek için WebView2'yi güncelle.</p><div id="results" aria-busy="true"><p class="loading" role="status">Uzantılar yükleniyor…</p></div></div></main>
+<script>
+'use strict';
+initPage('extensions');
+const results=document.getElementById('results');
+function mutate(type,payload){send(type,payload);send('extensions.list');}
+on('extensions.list',message => {
+  const restoreFocus=rememberFocus(results);
+  results.setAttribute('aria-busy','false');results.replaceChildren();
+  const supported=message.supported===true;
+  document.getElementById('unsupported').hidden=supported;document.getElementById('load').disabled=!supported;
+  if(!supported)return;
+  if(!message.items?.length){empty(results,'Biraz daha sana özel','Mağazadan bir uzantı eklediğinde burada görünecek.');return;}
+  const list=el('div',{class:'card list',role:'list','aria-label':'Yüklü uzantılar'});
+  for(const item of message.items){
+    const fallback=el('span',{class:'badge','aria-hidden':'true'},icon('puzzle'));
+    let image=fallback;
+    if(typeof item.icon==='string' && /^data:image\/(png|jpeg|gif|webp|bmp|x-icon|vnd.microsoft.icon|svg\+xml)(;[^,]*)?,/i.test(item.icon)) {image=el('img',{class:'extension-icon',src:item.icon,alt:''});image.addEventListener('error',() => image.replaceWith(fallback),{once:true});}
+    const toggle=el('button',{type:'button',class:'switch',role:'switch','aria-checked':String(!!item.enabled),'aria-label':`${item.name} uzantısını etkinleştir`,onclick:() => mutate('extensions.toggle',{id:item.id,enabled:!item.enabled})});
+    const pin=action(item.pinned?'Araç çubuğundan ayır':'Araç çubuğuna sabitle',() => mutate('extensions.pin',{id:item.id,pinned:!item.pinned}),'pin',{'aria-pressed':String(!!item.pinned)});
+    const remove=action('Uzantıyı kaldır',event => confirmInline(event.currentTarget,`${item.name} kaldırılsın mı?`,() => mutate('extensions.remove',{id:item.id})),'delete');
+    list.append(el('div',{class:'row',role:'listitem','data-key':item.id},image,el('div',{class:'row-main'},el('div',{class:'title'},item.name),el('div',{class:'detail'},`${item.enabled?'Etkin':'Devre dışı'}${item.pinned?' · Sabitlenmiş':''}`)),el('div',{class:'actions'},pin,remove,toggle)));
+  }results.append(list);restoreFocus();
+});
+for(const type of ['extensions.toggle','extensions.remove','extensions.pin','extensions.loadUnpacked'])on(type,() => send('extensions.list'));
+document.getElementById('store').addEventListener('click',() => send('open',{url:'https://chromewebstore.google.com/',newTab:true}));
+document.getElementById('load').addEventListener('click',() => send('extensions.loadUnpacked'));
+send('extensions.list');
+</script></body></html>

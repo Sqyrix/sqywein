@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self'; img-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'"><title>Yer işaretleri</title><link rel="stylesheet" href="/app.css"><script src="/app.js"></script></head>
+<body><main class="main" id="main" tabindex="-1"><div class="content"><h1>Yer işaretleri</h1><p class="subtitle">Yeniden gelmek isteyeceğin yerler.</p><div class="toolbar"><label class="search"><span class="sr-only">Yer işaretlerinde ara</span><input id="search" type="search" placeholder="Yer işaretlerinde ara" autocomplete="off"></label></div><div id="results" aria-busy="true"><p class="loading" role="status">Yer işaretleri yükleniyor…</p></div><p class="count">Sıralamak için sürükle veya yukarı / aşağı düğmelerini kullan.</p><p id="reorder-status" class="sr-only" role="status"></p></div></main>
+<script>
+'use strict';
+initPage('bookmarks');
+let items=[];let dragged=null;
+const results=document.getElementById('results');const search=document.getElementById('search');
+function mutate(type,payload){send(type,payload);send('bookmarks.list');}
+function move(from,to){if(from===to||from<0||to<0||from>=items.length||to>=items.length)return;const title=items[from].title;mutate('bookmarks.move',{from,to});const [item]=items.splice(from,1);items.splice(to,0,item);render();const row=[...results.querySelectorAll('.row')].find(node => node.dataset.url===item.url);row?.querySelector('a')?.focus();document.getElementById('reorder-status').textContent=`${title}, ${to+1}. sıraya taşındı.`;}
+function render(){
+  const restoreFocus=rememberFocus(results);
+  results.replaceChildren();results.setAttribute('aria-busy','false');const query=search.value.trim().toLocaleLowerCase('tr-TR');
+  const visible=items.map((item,index) => ({item,index})).filter(({item}) => `${item.title} ${item.url}`.toLocaleLowerCase('tr-TR').includes(query));
+  if(!visible.length){empty(results,query?'Sonuç bulunamadı':'Güzel yerleri sakla',query?'Başka bir kelime ya da adres dene.':'Adres çubuğundaki yıldızla bir yer işareti ekle.');restoreFocus();return;}
+  const list=el('div',{class:'card list',role:'list','aria-label':'Yer işaretleri'});
+  for(const {item,index} of visible){
+    const link=openLink(item.title,item.url);const title=el('div',{},link);let clickTimer;
+    const edit=() => {row.draggable=false;inlineEdit(title,item.title,value => {row.draggable=true;mutate('bookmarks.rename',{url:item.url,title:value});},() => {row.draggable=true;});};
+    // Delay unmodified title clicks briefly so a double-click can enter rename.
+    link.addEventListener('click',event => {if(event.ctrlKey || event.metaKey || event.button!==0)return;event.preventDefault();event.stopImmediatePropagation();clearTimeout(clickTimer);if(safeURL(item.url)!=='#')clickTimer=setTimeout(() => send('open',{url:item.url,newTab:false}),250);},true);
+    link.addEventListener('dblclick',event => {event.preventDefault();clearTimeout(clickTimer);edit();});
+    const info=el('div',{class:'row-main',ondblclick:event => {if(!event.target.closest('a,input,button'))edit();}},title,el('div',{class:'detail'},host(item.url)));
+    const actions=el('div',{class:'actions'},action('Adını değiştir',edit),action('Yukarı taşı',() => move(index,index-1),null,{'aria-label':`${item.title}: yukarı taşı`,disabled:index===0}),action('Aşağı taşı',() => move(index,index+1),null,{'aria-label':`${item.title}: aşağı taşı`,disabled:index===items.length-1}),action('Yer işaretini sil',() => mutate('bookmarks.remove',{url:item.url}),'delete'));
+    const row=el('div',{class:'row',role:'listitem',draggable:'true','data-url':item.url},badge(item.title || host(item.url)),info,actions);
+    row.addEventListener('dragstart',event => {if(event.target.closest('input,button')){event.preventDefault();return;}dragged=index;event.dataTransfer.effectAllowed='move';event.dataTransfer.setData('text/plain',String(index));row.classList.add('dragging');});
+    row.addEventListener('dragover',event => {if(dragged===null)return;event.preventDefault();event.dataTransfer.dropEffect='move';row.classList.add('drop-target');});
+    row.addEventListener('dragleave',() => row.classList.remove('drop-target'));
+    row.addEventListener('drop',event => {event.preventDefault();row.classList.remove('drop-target');if(dragged!==null)move(dragged,index);dragged=null;});
+    row.addEventListener('dragend',() => {dragged=null;results.querySelectorAll('.dragging,.drop-target').forEach(node => node.classList.remove('dragging','drop-target'));});
+    list.append(row);
+  }results.append(list);restoreFocus();
+}
+on('bookmarks.list',message => {items=message.items || [];render();});
+for(const type of ['bookmarks.remove','bookmarks.rename','bookmarks.move'])on(type,() => send('bookmarks.list'));
+search.addEventListener('input',render);send('bookmarks.list');
+</script></body></html>

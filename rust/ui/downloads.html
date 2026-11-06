@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'"><title>İndirmeler</title><link rel="stylesheet" href="/app.css"><script src="/app.js"></script></head>
+<body><main class="main" id="main" tabindex="-1"><div class="content"><h1>İndirmeler</h1><p class="subtitle">Dosyaların ve devam eden indirmelerin.</p><div class="toolbar"><label class="search"><span class="sr-only">İndirmelerde ara</span><input id="search" type="search" placeholder="İndirmelerde ara" autocomplete="off"></label><button id="folder" type="button">İndirilenler klasörünü aç</button></div><div class="page-actions"><button id="clear" class="quiet" type="button">Tamamlanan kayıtları temizle</button></div><div id="results" aria-busy="true"><p class="loading" role="status">İndirmeler yükleniyor…</p></div><p class="count">Kayıtları temizlemek, dosyaları bilgisayarından silmez.</p></div></main>
+<script>
+'use strict';
+initPage('downloads');
+let items=[];
+const results=document.getElementById('results');const search=document.getElementById('search');
+const labels={progress:'İndiriliyor',done:'Tamamlandı',failed:'Başarısız',canceled:'İptal edildi',paused:'Duraklatıldı'};
+function downloadRow(item){
+  const active=['progress','paused'].includes(item.status);
+  const name=item.name || 'Adsız dosya';
+  const title=item.status==='done' ? action(name,() => send('downloads.open',{id:item.id}),null,{class:'quiet title',title:item.path}) : el('div',{class:'title'},name);
+  const detail=el('div',{class:'detail'},el('span',{class:item.status==='failed'?'status-failed':''},labels[item.status] || 'Durum bilinmiyor'),` · ${bytes(item.received)}${item.total>0 ? ` / ${bytes(item.total)}` : active ? ' / Boyut bilinmiyor' : ''}`);
+  const info=el('div',{class:'row-main'},title,detail,el('div',{class:'detail',title:item.path},host(item.url)));
+  if(active){const known=item.total>0;const percentage=known?Math.min(100,Math.max(0,Math.round(item.received/item.total*100))):0;const progress=el('div',{class:`progress${!known && item.status==='progress'?' indeterminate':''}`,role:'progressbar','aria-label':`${name} indirme ilerlemesi`,'aria-valuemin':'0','aria-valuemax':'100',...(known ? {'aria-valuenow':percentage} : {'aria-valuetext':'Boyut bilinmiyor'})},el('span',{}));if(known)progress.firstChild.style.width=`${percentage}%`;info.append(progress);}
+  const actions=el('div',{class:'actions'});
+  if(item.status==='done')actions.append(action('Dosyayı aç',() => send('downloads.open',{id:item.id}),'open'),action('Klasörde göster',() => send('downloads.show',{id:item.id}),'folder'));
+  if(active)actions.append(action(item.status==='paused'?'Sürdür':'Duraklat',() => send(item.status==='paused'?'downloads.resume':'downloads.pause',{id:item.id})),action('İptal et',() => send('downloads.cancel',{id:item.id}),'close'));
+  else actions.append(action('Kaydı kaldır',() => send('downloads.remove',{id:item.id}),'delete'));
+  return el('div',{class:'row',role:'listitem','data-id':item.id},(item.icon?el('img',{class:'file-icon',src:item.icon,alt:'','aria-hidden':'true'}):el('span',{class:'badge','aria-hidden':'true'},icon('download'))),info,actions);
+}
+function render(){
+  const restoreFocus=rememberFocus(results);
+  const query=search.value.trim().toLocaleLowerCase('tr-TR');
+  const visible=items.filter(item => `${item.name} ${item.url} ${item.path}`.toLocaleLowerCase('tr-TR').includes(query)).sort((a,b) => (Date.parse(b.when)||0)-(Date.parse(a.when)||0));
+  results.setAttribute('aria-busy','false');results.replaceChildren();
+  if(!visible.length){empty(results,query?'Sonuç bulunamadı':'İndirmelerin burada',query?'Başka bir dosya adı dene.':'İndirdiğin dosyalara buradan ulaşabilirsin.');restoreFocus();return;}
+  results.append(el('div',{class:'card list',role:'list','aria-label':'İndirilen dosyalar'},...visible.map(downloadRow)));
+  restoreFocus();
+}
+on('downloads.list',message => {items=message.items || [];render();});
+on('downloads.update',message => {
+  if(!message.item)return;const index=items.findIndex(item => item.id===message.item.id);if(index<0){items.unshift(message.item);render();return;}
+  const previous=items[index];items[index]=message.item;
+  // Keep every unrelated row and its keyboard focus intact during live updates.
+  const old=[...results.querySelectorAll('[data-id]')].find(row => row.dataset.id===String(message.item.id));
+  if(!old || previous.when!==message.item.when || previous.name!==message.item.name || previous.path!==message.item.path || previous.url!==message.item.url){render();return;}
+  if(previous.status===message.item.status){const fresh=downloadRow(message.item);old.querySelector('.row-main').replaceWith(fresh.querySelector('.row-main'));}
+  else {const hadFocus=old.contains(document.activeElement);const fresh=downloadRow(message.item);old.replaceWith(fresh);if(hadFocus)fresh.querySelector('button')?.focus();}
+});
+// Mutations refresh with the existing list request; no extra protocol is needed.
+for(const type of ['downloads.open','downloads.show','downloads.cancel','downloads.pause','downloads.resume','downloads.remove','downloads.clear'])on(type,() => send('downloads.list'));
+search.addEventListener('input',render);
+document.getElementById('folder').addEventListener('click',() => send('downloads.openFolder'));
+document.getElementById('clear').addEventListener('click',event => confirmInline(event.currentTarget,'Tamamlanan, başarısız ve iptal edilen kayıtlar temizlensin mi?',() => send('downloads.clear')));
+send('downloads.list');
+</script></body></html>
