@@ -6,6 +6,9 @@ cd /d "%~dp0"
 set "CARGO=%USERPROFILE%\.cargo\bin\cargo.exe"
 if not exist "%CARGO%" set "CARGO=cargo"
 
+rem Derleme dosyalari (birkac GB) proje klasorunde degil, OneDrive disinda tutulur.
+set "CARGO_TARGET_DIR=%LOCALAPPDATA%\sqywein-build"
+
 echo Sqywein derleniyor...
 "%CARGO%" build --release
 if errorlevel 1 (
@@ -14,4 +17,4 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
-start "" "%~dp0target\release\sqywein.exe" %*
+start "" "%CARGO_TARGET_DIR%\release\sqywein.exe" %*
