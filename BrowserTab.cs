@@ -1,6 +1,7 @@
 using System;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
+using System.Threading.Tasks;
 using System.Windows.Media;
 using Microsoft.Web.WebView2.Wpf;
 
@@ -24,8 +25,21 @@ public sealed class BrowserTab : INotifyPropertyChanged
     private TabMemory _memory = TabMemory.Asleep;
 
     public WebView2? View { get; set; }
+    public Task? ViewTask { get; set; }
     public DateTime LastActive { get; set; } = DateTime.UtcNow;
     public bool PlaysAudio { get; set; }
+
+    /// <summary>Yüklemeyi kullanıcı durdurdu; sonuç hata sayılmaz.</summary>
+    public bool StoppedByUser { get; set; }
+
+    /// <summary>Doluysa sayfa yerine bu mesajla hata ekranı gösterilir.</summary>
+    public string? Error { get; set; }
+
+    /// <summary>Bu sekmeyi açan sekme; kapanınca oraya dönülür.</summary>
+    public BrowserTab? Opener { get; set; }
+
+    /// <summary>Bir kez bile sayfa yüklendi mi? Yüklenmeden indirmeye dönen açılır sekmeler kapatılır.</summary>
+    public bool HasLoaded { get; set; }
 
     /// <summary>Görünüm hazır olunca Url yüklenmeli mi? Açılır pencereleri motor kendisi yükler.</summary>
     public bool PendingLoad { get; set; } = true;

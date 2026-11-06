@@ -18,5 +18,6 @@ public static class BlockList
         "yandexadexchange.net", "mc.yandex.ru", "adform.net", "bidswitch.net",
         "sharethrough.com", "3lift.com", "connect.facebook.net", "ads-twitter.com",
         "analytics.tiktok.com", "ads.linkedin.com", "admatic.com.tr", "adcolony.com",
+        "medyanetads.com", "pghub.io", "btloader.com",
     };
 }

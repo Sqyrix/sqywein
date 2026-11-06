@@ -26,29 +26,54 @@ public partial class MainWindow : Window
     private static readonly TimeSpan SleepAfter = TimeSpan.FromMinutes(5);
 
     private const string SearchUrl = "https://www.google.com/search?q=";
+    private static readonly string GlyphStop = ((char)0xE711).ToString();
+    private static readonly string GlyphReload = ((char)0xE72C).ToString();
+    private static readonly string GlyphLock = ((char)0xE72E).ToString();
+    private static readonly string GlyphSearch = ((char)0xE721).ToString();
+    private static readonly string GlyphStarFilled = ((char)0xE735).ToString();
+    private static readonly string GlyphStar = ((char)0xE734).ToString();
+    private static readonly string GlyphRestore = ((char)0xE923).ToString();
+    private static readonly string GlyphMaximize = ((char)0xE922).ToString();
 
     private readonly ObservableCollection<BrowserTab> _tabs = new();
     private readonly ObservableCollection<Favorite> _favorites;
+    private readonly ObservableCollection<DownloadItem> _downloads;
+    private readonly History _history;
     private readonly Stack<string> _closedUrls = new();
+    private readonly List<WebView2> _lingering = new();
     private readonly AppState _state;
     private readonly DispatcherTimer _housekeeping;
+    private readonly bool _restEnabled;
     private CoreWebView2Environment? _env;
     private Task<CoreWebView2Environment>? _envTask;
     private BrowserTab? _active;
-    private readonly bool _restEnabled;
-    private bool _profileReady;
+    private BrowserTab? _dragTab;
+    private Point _dragStart;
+    private bool _dragging;
+    private bool _stateDirty;
 
     public MainWindow()
     {
         InitializeComponent();
         _state = Storage.Load();
+        _history = new History(Storage.LoadHistory());
         _favorites = new ObservableCollection<Favorite>(_state.Favorites);
+        _downloads = new ObservableCollection<DownloadItem>(_state.Downloads);
         TabStrip.ItemsSource = _tabs;
         FavoritesList.ItemsSource = _favorites;
+        FavoritesEditor.ItemsSource = _favorites;
+        DownloadsList.ItemsSource = _downloads;
 
         SourceInitialized += (_, _) => ApplyWindowFrame();
         SizeChanged += (_, _) => FitTabs();
-        _tabs.CollectionChanged += (_, _) => FitTabs();
+        Deactivated += (_, _) => { Diagnostics.LogForeground("WINDOW deactivated"); CloseSuggestions(); };
+        Activated += (_, _) => Diagnostics.Log("WINDOW activated");
+        LocationChanged += (_, _) => CloseSuggestions();
+        SuggestPopup.Opened += (_, _) => MakeNonActivating(SuggestRoot);
+        ContentRendered += (_, _) => PrepareSuggestions();
+        _tabs.CollectionChanged += (_, _) => { FitTabs(); _stateDirty = true; };
+        _favorites.CollectionChanged += (_, _) => { _stateDirty = true; RefreshPanelEmptyStates(); };
+        _downloads.CollectionChanged += (_, _) => { _stateDirty = true; RefreshPanelEmptyStates(); };
 
         // Oturum geri yüklenirken hiçbir sekme motor başlatmaz; yalnızca etkin olan uyanır.
         foreach (var saved in _state.Tabs)
@@ -78,9 +103,10 @@ public partial class MainWindow : Window
             : _tabs[Math.Clamp(_state.ActiveIndex, 0, _tabs.Count - 1)]);
 
         _housekeeping = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
-        _housekeeping.Tick += (_, _) => { RestUnusedTabs(); UpdateRam(); };
+        _housekeeping.Tick += (_, _) => { RestUnusedTabs(); UpdateRam(); RefreshDownloads(); SaveIfDirty(); };
         _housekeeping.Start();
         UpdateRam();
+        _stateDirty = false; // Açılışta değişen bir şey yok; gereksiz kayıt yapılmasın.
     }
 
     // ---------- Motor ----------
@@ -89,75 +115,235 @@ public partial class MainWindow : Window
     {
         return _envTask ??= Create();
 
-        static async Task<CoreWebView2Environment> Create()
+        async Task<CoreWebView2Environment> Create()
         {
             var options = new CoreWebView2EnvironmentOptions
             {
                 // Aynı siteyi paylaşan sekmeler aynı süreci kullanabilsin.
                 AdditionalBrowserArguments = "--process-per-site",
             };
-            return await CoreWebView2Environment.CreateAsync(
+            var env = await CoreWebView2Environment.CreateAsync(
                 null, Path.Combine(Storage.Root, "profile"), options);
+            _env = env;
+
+            // Son görünüm kapanınca motor da kapanır. Sonraki site yeni bir ortam ister.
+            env.BrowserProcessExited += (_, _) =>
+            {
+                if (!ReferenceEquals(_env, env)) return;
+                _env = null;
+                _envTask = null;
+            };
+            return env;
         }
     }
 
-    private async Task EnsureView(BrowserTab tab)
+    private Task EnsureView(BrowserTab tab)
     {
-        if (tab.View != null) return;
+        if (tab.View?.CoreWebView2 != null) return Task.CompletedTask;
+        return tab.ViewTask ??= CreateView(tab);
+    }
 
-        var view = new WebView2 { Visibility = Visibility.Collapsed };
-        tab.View = view;
-        ContentHost.Children.Add(view);
+    private async Task CreateView(BrowserTab tab)
+    {
+        try
+        {
+            // Eski motor kapanırken yeni motor başlatılırsa profil kısa süre meşgul olabilir.
+            for (var attempt = 0; attempt < 4; attempt++)
+            {
+                if (attempt > 0) await Task.Delay(700);
+                if (!_tabs.Contains(tab)) return;
 
-        _env = await GetEnvironment();
-        await view.EnsureCoreWebView2Async(_env);
+                var view = new WebView2 { Visibility = Visibility.Collapsed };
+                tab.View = view;
+                ContentHost.Children.Add(view);
+                try
+                {
+                    var env = await GetEnvironment();
+                    await view.EnsureCoreWebView2Async(env);
+                    if (tab.View != view) return; // Sekme bu sırada kapatıldı.
+                    ConfigureCore(tab, view.CoreWebView2);
+                    tab.Memory = TabMemory.Awake;
+                    return;
+                }
+                catch (Exception e) when (e is COMException or InvalidOperationException or ArgumentException)
+                {
+                    if (tab.View != view) return;
+                    ContentHost.Children.Remove(view);
+                    view.Dispose();
+                    tab.View = null;
+                    _env = null;
+                    _envTask = null;
+                }
+            }
 
-        // Sekme bu bekleme sırasında kapatılmış olabilir.
-        if (tab.View != view) return;
+            tab.Error = "Tarayıcı motoru başlatılamadı. Yeniden dene, olmazsa Sqywein'i kapatıp aç.";
+            if (tab == _active) ShowActivePage();
+        }
+        finally
+        {
+            tab.ViewTask = null;
+        }
+    }
 
-        var core = view.CoreWebView2;
+    private void ConfigureCore(BrowserTab tab, CoreWebView2 core)
+    {
         core.Settings.IsStatusBarEnabled = true;
         core.Settings.IsPasswordAutosaveEnabled = true;
         core.Settings.IsGeneralAutofillEnabled = true;
 
-        if (!_profileReady)
-        {
-            // Profil tüm sekmelerde ortaktır; motorun yerleşik izleyici koruması ek bellek istemez.
-            core.Profile.PreferredTrackingPreventionLevel = CoreWebView2TrackingPreventionLevel.Strict;
-            _profileReady = true;
-        }
+        // Motorun yerleşik izleyici koruması ek bellek istemez.
+        core.Profile.PreferredTrackingPreventionLevel = CoreWebView2TrackingPreventionLevel.Strict;
         AttachBlocker(core);
+        Diagnostics.WatchNetwork(core);
 
-        core.SourceChanged += (_, _) =>
+        // İndirmeleri kendi panelimiz gösterir; motorun kutusu açılırsa hemen kapatılır.
+        core.IsDefaultDownloadDialogOpenChanged += (_, _) =>
+        {
+            if (core.IsDefaultDownloadDialogOpen) core.CloseDefaultDownloadDialog();
+        };
+
+        core.SourceChanged += (_, e) =>
         {
             tab.Url = core.Source;
+            _stateDirty = true;
+            // Tek sayfalık uygulamalar yeni belge yüklemeden adres değiştirir.
+            if (!e.IsNewDocument) RecordVisit(core.Source, core.DocumentTitle);
             if (tab == _active) RefreshToolbar();
         };
-        core.DocumentTitleChanged += (_, _) => tab.Title = core.DocumentTitle;
-        core.NavigationStarting += (_, _) => { tab.IsLoading = true; if (tab == _active) RefreshToolbar(); };
-        core.NavigationCompleted += (_, _) => { tab.IsLoading = false; if (tab == _active) RefreshToolbar(); };
+        core.DocumentTitleChanged += (_, _) =>
+        {
+            tab.Title = core.DocumentTitle;
+            _stateDirty = true;
+            _history.UpdateTitle(core.Source, core.DocumentTitle);
+            if (tab == _active) RefreshToolbar();
+        };
+        core.NavigationStarting += (_, _) =>
+        {
+            tab.IsLoading = true;
+            if (tab.Error != null)
+            {
+                tab.Error = null;
+                if (tab == _active) ShowActivePage();
+            }
+            if (tab == _active) RefreshToolbar();
+        };
+        core.NavigationCompleted += (_, e) =>
+        {
+            Diagnostics.Log($"NAV success={e.IsSuccess} status={e.WebErrorStatus} http={e.HttpStatusCode} source={core.Source} wanted={tab.Url}");
+            tab.IsLoading = false;
+            if (e.IsSuccess)
+            {
+                tab.HasLoaded = true;
+                RecordVisit(core.Source, core.DocumentTitle);
+            }
+            else if (DescribeError(e.WebErrorStatus) is { } message)
+            {
+                tab.Error = message;
+                if (tab == _active) ShowActivePage();
+            }
+            else if (!tab.StoppedByUser && e.HttpStatusCode == 0 && core.Source == tab.Url)
+            {
+                // Bağlantı reddedilince motor durumu "bilinmiyor" bildirir ama adres istenen adrestir.
+                // İndirmede ise adres önceki sayfada kalır, o yüzden aşağıdaki dala düşer.
+                tab.Error = "Siteye bağlanılamadı. Site kapalı olabilir.";
+                if (tab == _active) ShowActivePage();
+            }
+            else if (core.Source.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+            {
+                // İndirme ya da iptal edilen yüklemede sayfa değişmez; adres çubuğu da geri dönmeli.
+                tab.Url = core.Source;
+            }
+            tab.StoppedByUser = false;
+            if (tab == _active) RefreshToolbar();
+        };
+        core.ProcessFailed += (_, e) =>
+        {
+            if (e.ProcessFailedKind == CoreWebView2ProcessFailedKind.BrowserProcessExited)
+            {
+                RecoverFromEngineCrash();
+            }
+            else if (e.ProcessFailedKind == CoreWebView2ProcessFailedKind.RenderProcessExited)
+            {
+                tab.IsLoading = false;
+                tab.Error = "Bu sayfa beklenmedik şekilde kapandı.";
+                if (tab == _active) ShowActivePage();
+            }
+        };
         core.HistoryChanged += (_, _) => { if (tab == _active) RefreshToolbar(); };
         core.IsDocumentPlayingAudioChanged += (_, _) => tab.PlaysAudio = core.IsDocumentPlayingAudio;
         core.FaviconChanged += async (_, _) => await LoadFavicon(tab, core);
         core.WindowCloseRequested += (_, _) => CloseTab(tab);
+        core.DownloadStarting += (_, e) => OnDownloadStarting(tab, e);
         core.NewWindowRequested += async (_, e) =>
         {
             // window.opener korunur; aksi halde "Google ile giriş yap" pencereleri bozulur.
             var deferral = e.GetDeferral();
-            var child = new BrowserTab { Title = "Yükleniyor…", Url = e.Uri, PendingLoad = false };
+            var child = new BrowserTab { Title = "Yükleniyor…", Url = e.Uri, PendingLoad = false, Opener = tab };
             _tabs.Insert(_tabs.IndexOf(tab) + 1, child);
             await EnsureView(child);
-            child.Memory = TabMemory.Awake;
-            e.NewWindow = child.View!.CoreWebView2;
-            e.Handled = true;
-            deferral.Complete();
-            Activate(child);
+            if (child.View?.CoreWebView2 != null)
+            {
+                child.Memory = TabMemory.Awake;
+                e.NewWindow = child.View.CoreWebView2;
+                e.Handled = true;
+                deferral.Complete();
+                Activate(child);
+            }
+            else
+            {
+                deferral.Complete();
+                Activate(child); // Hata ekranı motorun açılamadığını söyler.
+            }
         };
-
-        tab.Memory = TabMemory.Awake;
     }
 
-    private void AttachBlocker(CoreWebView2 core)
+    private void RecordVisit(string url, string title)
+    {
+        _history.Record(url, title);
+        if (HistorySection.Visibility == Visibility.Visible) RefreshHistoryPanel();
+    }
+
+    /// <summary>Kullanıcıya gösterilecek hata; null ise ekran değişmez (ör. iptal edilen yükleme, indirme).</summary>
+    private static string? DescribeError(CoreWebView2WebErrorStatus status) => status switch
+    {
+        CoreWebView2WebErrorStatus.Unknown or
+        CoreWebView2WebErrorStatus.OperationCanceled or
+        CoreWebView2WebErrorStatus.ConnectionAborted or
+        CoreWebView2WebErrorStatus.ValidAuthenticationCredentialsRequired or
+        CoreWebView2WebErrorStatus.ValidProxyAuthenticationRequired => null,
+
+        CoreWebView2WebErrorStatus.HostNameNotResolved =>
+            "Bu adres bulunamadı. Yazımını kontrol et.",
+        CoreWebView2WebErrorStatus.Disconnected =>
+            "İnternet bağlantısı yok. Bağlantını kontrol edip yeniden dene.",
+        CoreWebView2WebErrorStatus.Timeout =>
+            "Site zamanında yanıt vermedi.",
+        CoreWebView2WebErrorStatus.CannotConnect or
+        CoreWebView2WebErrorStatus.ConnectionReset or
+        CoreWebView2WebErrorStatus.ServerUnreachable =>
+            "Siteye bağlanılamadı. Site kapalı olabilir.",
+        CoreWebView2WebErrorStatus.CertificateCommonNameIsIncorrect or
+        CoreWebView2WebErrorStatus.CertificateExpired or
+        CoreWebView2WebErrorStatus.ClientCertificateContainsErrors or
+        CoreWebView2WebErrorStatus.CertificateRevoked or
+        CoreWebView2WebErrorStatus.CertificateIsInvalid =>
+            "Bu sitenin güvenlik sertifikası geçersiz, bu yüzden site açılmadı.",
+        _ => "Sayfa yüklenirken bir sorun oluştu.",
+    };
+
+    /// <summary>Motor çökerse sekmeler kaybolmaz: görünümler atılır, etkin sekme yeniden açılır.</summary>
+    private void RecoverFromEngineCrash()
+    {
+        _env = null;
+        _envTask = null;
+        Dispatcher.BeginInvoke(() =>
+        {
+            foreach (var tab in _tabs) DestroyView(tab);
+            if (_active != null) Activate(_active);
+        });
+    }
+
+    private static void AttachBlocker(CoreWebView2 core)
     {
         foreach (var host in BlockList.Hosts)
         {
@@ -167,7 +353,10 @@ public partial class MainWindow : Window
                 CoreWebView2WebResourceRequestSourceKinds.All);
         }
         core.WebResourceRequested += (_, e) =>
-            e.Response = _env!.CreateWebResourceResponse(null, 403, "Blocked", "");
+        {
+            Diagnostics.Log("BLOCK " + e.Request.Uri);
+            e.Response = core.Environment.CreateWebResourceResponse(null, 403, "Blocked", "");
+        };
     }
 
     private static async Task LoadFavicon(BrowserTab tab, CoreWebView2 core)
@@ -205,19 +394,37 @@ public partial class MainWindow : Window
         _active = tab;
         tab.IsActive = true;
         tab.LastActive = DateTime.UtcNow;
+        _stateDirty = true;
 
+        ShowActivePage();
+        RefreshToolbar();
         if (tab.Url.Length == 0)
         {
-            StartPage.Visibility = Visibility.Visible;
             StartSearch.Text = "";
-            RefreshToolbar();
             StartSearch.Focus();
             return;
         }
+        if (tab.Error == null) _ = Wake(tab);
+    }
 
-        StartPage.Visibility = Visibility.Collapsed;
-        _ = Wake(tab);
-        RefreshToolbar();
+    /// <summary>Başlangıç, hata ve web sayfasından hangisinin görüneceğine tek yerden karar verir.</summary>
+    private void ShowActivePage()
+    {
+        var tab = _active;
+        if (tab == null) return;
+        var isStart = tab.Url.Length == 0;
+        var isError = !isStart && tab.Error != null;
+
+        StartPage.Visibility = isStart ? Visibility.Visible : Visibility.Collapsed;
+        ErrorPage.Visibility = isError ? Visibility.Visible : Visibility.Collapsed;
+        if (isError)
+        {
+            ErrorMessage.Text = tab.Error!;
+            ErrorUrl.Text = History.Shorten(tab.Url);
+        }
+        // Web görünümü her zaman WPF'nin üstünde çizilir; hata ekranı için gizlenmesi gerekir.
+        if (tab.View?.CoreWebView2 != null)
+            tab.View.Visibility = isStart || isError ? Visibility.Collapsed : Visibility.Visible;
     }
 
     private async Task Wake(BrowserTab tab)
@@ -226,7 +433,6 @@ public partial class MainWindow : Window
         if (tab != _active || tab.View?.CoreWebView2 == null) return;
 
         var core = tab.View.CoreWebView2;
-        tab.View.Visibility = Visibility.Visible;
         tab.Memory = TabMemory.Awake;
         ApplyMemoryLevels();
         if (core.IsSuspended) core.Resume();
@@ -235,6 +441,8 @@ public partial class MainWindow : Window
             tab.PendingLoad = false;
             core.Navigate(tab.Url);
         }
+        ShowActivePage();
+        Diagnostics.Log("WAKE focus to view");
         tab.View.Focus();
         RefreshToolbar();
     }
@@ -246,12 +454,19 @@ public partial class MainWindow : Window
         Activate(tab);
     }
 
-    private void CloseTab(BrowserTab tab)
+    /// <summary>Başlangıç sayfasındaysan orada, değilsen yeni sekmede açar.</summary>
+    private void OpenUrl(string url)
+    {
+        if (_active != null && _active.Url.Length == 0) Navigate(url);
+        else NewTab(url);
+    }
+
+    private void CloseTab(BrowserTab tab, bool remember = true)
     {
         var index = _tabs.IndexOf(tab);
         if (index < 0) return;
 
-        if (tab.Url.Length > 0) _closedUrls.Push(tab.Url);
+        if (remember && tab.Url.Length > 0) _closedUrls.Push(tab.Url);
         DestroyView(tab);
         _tabs.RemoveAt(index);
 
@@ -263,20 +478,43 @@ public partial class MainWindow : Window
         if (tab == _active)
         {
             _active = null;
-            Activate(_tabs[Math.Min(index, _tabs.Count - 1)]);
+            var next = tab.Opener != null && _tabs.Contains(tab.Opener)
+                ? tab.Opener
+                : _tabs[Math.Min(index, _tabs.Count - 1)];
+            Activate(next);
         }
     }
 
     private void DestroyView(BrowserTab tab)
     {
         if (tab.View == null) return;
-        ContentHost.Children.Remove(tab.View);
-        tab.View.Dispose();
+        var view = tab.View;
         tab.View = null;
         tab.Memory = TabMemory.Asleep;
         tab.PendingLoad = true;
         tab.IsLoading = false;
         tab.PlaysAudio = false;
+
+        // Görünüm kapanırsa başlattığı indirme de yarıda kalabilir; indirme bitene kadar beklet.
+        if (_downloads.Any(d => d.IsActive && ReferenceEquals(d.Owner, view)))
+        {
+            view.Visibility = Visibility.Collapsed;
+            _lingering.Add(view);
+            return;
+        }
+        ContentHost.Children.Remove(view);
+        view.Dispose();
+    }
+
+    private void ReleaseLingeringViews()
+    {
+        foreach (var view in _lingering.ToList())
+        {
+            if (_downloads.Any(d => d.IsActive && ReferenceEquals(d.Owner, view))) continue;
+            _lingering.Remove(view);
+            ContentHost.Children.Remove(view);
+            view.Dispose();
+        }
     }
 
     /// <summary>Etkin olmayan, ses çalmayan sekmeleri önce dondurur, sonra sürecini kapatır.</summary>
@@ -287,6 +525,8 @@ public partial class MainWindow : Window
         foreach (var tab in _tabs)
         {
             if (tab == _active || tab.View?.CoreWebView2 == null || tab.PlaysAudio) continue;
+            // İndirme yapan görünüm dondurulursa indirme de durabilir.
+            if (_downloads.Any(d => d.IsActive && ReferenceEquals(d.Owner, tab.View))) continue;
             var idle = now - tab.LastActive;
             if (idle >= SleepAfter) DestroyView(tab);
             else if (idle >= DozeAfter && tab.Memory == TabMemory.Awake) _ = Doze(tab);
@@ -328,19 +568,21 @@ public partial class MainWindow : Window
 
     private void Navigate(string text)
     {
+        CloseSuggestions();
         var url = ToUrl(text);
         if (url == null || _active == null) return;
         _active.Url = url;
-        StartPage.Visibility = Visibility.Collapsed;
+        _active.Error = null;
+        ShowActivePage();
         if (_active.View?.CoreWebView2 != null)
         {
             _active.PendingLoad = false;
-            _active.View.Visibility = Visibility.Visible;
             _active.View.CoreWebView2.Navigate(url);
             _active.View.Focus();
         }
         else
         {
+            _active.PendingLoad = true;
             _ = Wake(_active);
         }
         RefreshToolbar();
@@ -376,13 +618,13 @@ public partial class MainWindow : Window
         BackButton.IsEnabled = core?.CanGoBack == true;
         ForwardButton.IsEnabled = core?.CanGoForward == true;
         ReloadButton.IsEnabled = core != null;
-        ReloadButton.Content = _active?.IsLoading == true ? "" : "";
+        ReloadButton.Content = _active?.IsLoading == true ? GlyphStop : GlyphReload;
 
         var url = _active?.Url ?? "";
         if (!AddressBar.IsKeyboardFocused) AddressBar.Text = url;
-        LockIcon.Text = url.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ? "" : "";
+        LockIcon.Text = url.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ? GlyphLock : GlyphSearch;
         var saved = _favorites.Any(f => f.Url == url);
-        StarButton.Content = saved ? "" : "";
+        StarButton.Content = saved ? GlyphStarFilled : GlyphStar;
         StarButton.Foreground = (System.Windows.Media.Brush)FindResource(saved ? "Accent" : "Muted");
         StarButton.IsEnabled = url.Length > 0;
         Title = _active == null || _active.Url.Length == 0 ? "Sqywein" : $"{_active.Title} - Sqywein";
@@ -390,23 +632,25 @@ public partial class MainWindow : Window
 
     private void UpdateRam()
     {
-        var own = Environment.ProcessId;
-        var pids = new List<int> { own };
+        var pids = new List<int> { Environment.ProcessId };
         // Canlı görünüm yoksa motor da yoktur: başlangıç sayfasında ölçülecek süreç kalmaz.
-        var hasEngine = _env != null && _tabs.Any(t => t.View?.CoreWebView2 != null);
-        var processCount = 1;
+        var hasEngine = _env != null && (_lingering.Count > 0 || _tabs.Any(t => t.View?.CoreWebView2 != null));
         if (hasEngine)
         {
-            var infos = _env!.GetProcessInfos();
-            pids.AddRange(infos.Select(p => p.ProcessId));
-            processCount += infos.Count;
+            try
+            {
+                pids.AddRange(_env!.GetProcessInfos().Select(p => p.ProcessId));
+            }
+            catch (Exception e) when (e is COMException or InvalidOperationException)
+            {
+                // Motor o an kapanıyor olabilir; gösterge bir sonraki turda düzelir.
+            }
         }
 
-        var total = MemoryMeter.Total(pids);
-        var mb = total / (1024 * 1024);
+        var mb = MemoryMeter.Total(pids) / (1024 * 1024);
         RamText.Text = $"{mb} MB";
         var asleep = _tabs.Count(t => t.IsAsleep);
-        RamText.ToolTip = $"{processCount} süreç, {_tabs.Count} sekme, {asleep} sekme uyuyor";
+        RamText.ToolTip = $"{pids.Count} süreç, {_tabs.Count} sekme, {asleep} sekme uyuyor";
         AwakeMascot.Visibility = asleep > 0 ? Visibility.Collapsed : Visibility.Visible;
         SleepingMascot.Visibility = asleep > 0 ? Visibility.Visible : Visibility.Collapsed;
         StartRam.Text = asleep > 0
@@ -436,13 +680,63 @@ public partial class MainWindow : Window
     {
         var core = _active?.View?.CoreWebView2;
         if (core == null) return;
-        if (_active!.IsLoading) core.Stop();
-        else core.Reload();
+        if (_active!.IsLoading)
+        {
+            _active.StoppedByUser = true;
+            core.Stop();
+        }
+        else
+        {
+            core.Reload();
+        }
+    }
+
+    private void OnRetry(object sender, RoutedEventArgs e)
+    {
+        if (_active == null) return;
+        var url = _active.Url;
+        _active.Error = null;
+        // Motor açılamadıysa görünüm yoktur; Navigate bu durumda yeniden başlatır.
+        Navigate(url);
     }
 
     private void OnTabMouseDown(object sender, MouseButtonEventArgs e)
     {
-        if (((FrameworkElement)sender).Tag is BrowserTab tab) Activate(tab);
+        if (((FrameworkElement)sender).Tag is not BrowserTab tab) return;
+        Activate(tab);
+        _dragTab = tab;
+        _dragStart = e.GetPosition(TabStrip);
+        _dragging = false;
+        TabStrip.CaptureMouse();
+    }
+
+    private void OnTabStripMouseMove(object sender, MouseEventArgs e)
+    {
+        if (_dragTab == null) return;
+        var position = e.GetPosition(TabStrip);
+        if (!_dragging && Math.Abs(position.X - _dragStart.X) < 6) return;
+        _dragging = true;
+
+        var slot = (double)TabStrip.Tag + 2;
+        var target = Math.Clamp((int)(position.X / slot), 0, _tabs.Count - 1);
+        var current = _tabs.IndexOf(_dragTab);
+        if (current >= 0 && current != target) _tabs.Move(current, target);
+    }
+
+    private void OnTabStripMouseUp(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton != MouseButton.Left || _dragTab == null) return;
+        _dragTab = null;
+        _dragging = false;
+        TabStrip.ReleaseMouseCapture();
+        // Sekmenin sayfası odağı geri alsın.
+        _active?.View?.Focus();
+    }
+
+    private void OnTabStripLostCapture(object sender, MouseEventArgs e)
+    {
+        _dragTab = null;
+        _dragging = false;
     }
 
     private void OnTabMouseUp(object sender, MouseButtonEventArgs e)
@@ -473,28 +767,11 @@ public partial class MainWindow : Window
         UpdateRam();
     }
 
-    private void OnAddressKeyDown(object sender, KeyEventArgs e)
+    private void OnStartTextChanged(object sender, TextChangedEventArgs e)
     {
-        if (e.Key == Key.Enter) { var text = AddressBar.Text; Keyboard.ClearFocus(); Navigate(text); }
-        else if (e.Key == Key.Escape) { Keyboard.ClearFocus(); RefreshToolbar(); }
-    }
-
-    private void OnAddressFocus(object sender, KeyboardFocusChangedEventArgs e) => AddressBar.SelectAll();
-
-    private void OnAddressMouseDown(object sender, MouseButtonEventArgs e)
-    {
-        if (AddressBar.IsKeyboardFocusWithin) return;
-        AddressBar.Focus();
-        e.Handled = true; // İlk tıklama seçimi bozmasın.
-    }
-
-    private void OnStartKeyDown(object sender, KeyEventArgs e)
-    {
-        if (e.Key == Key.Enter) Navigate(StartSearch.Text);
-    }
-
-    private void OnStartTextChanged(object sender, TextChangedEventArgs e) =>
         StartHint.Visibility = StartSearch.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+        UpdateSuggestions(StartSearch, StartBorder);
+    }
 
     private void OnFavoriteClick(object sender, MouseButtonEventArgs e)
     {
@@ -522,10 +799,13 @@ public partial class MainWindow : Window
         var handled = true;
 
         if (ctrl && shift && key == Key.T) { if (_closedUrls.Count > 0) NewTab(_closedUrls.Pop()); }
+        else if (ctrl && shift && key == Key.O) TogglePanel(FavoritesSection);
         else if (ctrl && key == Key.T) NewTab();
         else if (ctrl && key == Key.W) { if (_active != null) CloseTab(_active); }
         else if (ctrl && key == Key.L) { AddressBar.Focus(); AddressBar.SelectAll(); }
         else if (ctrl && key == Key.D) ToggleFavorite();
+        else if (ctrl && key == Key.H) TogglePanel(HistorySection);
+        else if (ctrl && key == Key.J) TogglePanel(DownloadsSection);
         else if (ctrl && key == Key.Tab) CycleTab(shift ? -1 : 1);
         else if (ctrl && key is >= Key.D1 and <= Key.D9)
         {
@@ -560,25 +840,54 @@ public partial class MainWindow : Window
         var maximized = WindowState == WindowState.Maximized;
         // Ekranı kaplayınca Windows pencereyi kenarlardan taşırır; içerik kesilmesin.
         RootGrid.Margin = maximized ? SystemParameters.WindowResizeBorderThickness : new Thickness(0);
-        MaxButton.Content = maximized ? "" : "";
+        MaxButton.Content = maximized ? GlyphRestore : GlyphMaximize;
         ApplyMemoryLevels();
+    }
+
+    private void SaveIfDirty()
+    {
+        try
+        {
+            if (_stateDirty)
+            {
+                SaveState();
+                _stateDirty = false;
+            }
+            if (_history.IsDirty) _history.Save();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Sonraki turda yeniden denenir; tarayıcı kullanımı engellenmez.
+        }
+    }
+
+    private void SaveState()
+    {
+        var saved = _tabs.Where(t => t.Url.Length > 0).ToList();
+        _state.Tabs = saved.Select(t => new SavedTab { Title = t.Title, Url = t.Url }).ToList();
+        _state.ActiveIndex = _active == null ? 0 : Math.Max(0, saved.IndexOf(_active));
+        _state.Favorites = _favorites.ToList();
+        _state.Downloads = _downloads.Where(d => !d.IsActive).Take(30).ToList();
+        Storage.Save(_state);
     }
 
     private void OnClosing(object? sender, CancelEventArgs e)
     {
+        var running = _downloads.Count(d => d.IsActive);
+        if (running > 0)
+        {
+            var answer = MessageBox.Show(this,
+                $"{running} indirme sürüyor. Kapatırsan yarıda kalır. Yine de kapatılsın mı?",
+                "Sqywein", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+            if (answer != MessageBoxResult.Yes)
+            {
+                e.Cancel = true;
+                return;
+            }
+        }
+
         _housekeeping.Stop();
-        _state.Tabs = _tabs.Where(t => t.Url.Length > 0)
-            .Select(t => new SavedTab { Title = t.Title, Url = t.Url }).ToList();
-        var saved = _tabs.Where(t => t.Url.Length > 0).ToList();
-        _state.ActiveIndex = _active == null ? 0 : Math.Max(0, saved.IndexOf(_active));
-        _state.Favorites = _favorites.ToList();
-        try
-        {
-            Storage.Save(_state);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            // Kapanışı engelleme; en kötü ihtimalle oturum geri yüklenmez.
-        }
+        _stateDirty = true;
+        SaveIfDirty();
     }
 }

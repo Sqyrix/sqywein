@@ -32,7 +32,9 @@
       <!-- Sağda boşluk bırakılır, pencere oradan sürüklenir -->
       <StackPanel Orientation="Horizontal" Margin="10,6,48,0" VerticalAlignment="Stretch">
         <Image Source="Assets/logo.png" Width="20" Height="20" Margin="0,0,8,6" VerticalAlignment="Center"/>
-        <ItemsControl x:Name="TabStrip" WindowChrome.IsHitTestVisibleInChrome="True">
+        <ItemsControl x:Name="TabStrip" WindowChrome.IsHitTestVisibleInChrome="True"
+                      MouseMove="OnTabStripMouseMove" PreviewMouseUp="OnTabStripMouseUp"
+                      LostMouseCapture="OnTabStripLostCapture">
           <ItemsControl.ItemsPanel>
             <ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate>
           </ItemsControl.ItemsPanel>
@@ -100,6 +102,12 @@
           <Button x:Name="ReloadButton" Style="{StaticResource IconButton}" Content="&#xE72C;" Click="OnReload" ToolTip="Yenile (F5)"/>
         </StackPanel>
 
+        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Margin="4,0,0,0">
+          <Button Style="{StaticResource IconButton}" Content="&#xE728;" Click="OnShowFavorites" ToolTip="Favoriler (Ctrl+Shift+O)"/>
+          <Button Style="{StaticResource IconButton}" Content="&#xE81C;" Click="OnShowHistory" ToolTip="Geçmiş (Ctrl+H)"/>
+          <Button Style="{StaticResource IconButton}" Content="&#xE896;" Click="OnShowDownloads" ToolTip="İndirmeler (Ctrl+J)"/>
+        </StackPanel>
+
         <!-- Canlı RAM göstergesi: tarayıcının ana fikri, bu yüzden hep görünür -->
         <Border DockPanel.Dock="Right" Margin="8,0,2,0" Padding="10,0" Height="28" CornerRadius="14"
                 BorderBrush="{StaticResource Line}" BorderThickness="1" VerticalAlignment="Center">
@@ -109,7 +117,7 @@
           </StackPanel>
         </Border>
 
-        <Border Height="32" CornerRadius="16" Margin="6,0,0,0" Background="{StaticResource Base}"
+        <Border x:Name="AddressBorder" Height="32" CornerRadius="16" Margin="6,0,0,0" Background="{StaticResource Base}"
                 BorderBrush="{StaticResource Line}" BorderThickness="1">
           <DockPanel>
             <TextBlock x:Name="LockIcon" DockPanel.Dock="Left" FontFamily="{StaticResource Icons}" Text="&#xE721;"
@@ -119,15 +127,221 @@
             <TextBox x:Name="AddressBar" Background="Transparent" BorderThickness="0"
                      Foreground="{StaticResource Ink}" CaretBrush="{StaticResource Accent}"
                      SelectionBrush="{StaticResource Accent}" VerticalAlignment="Center"
-                     KeyDown="OnAddressKeyDown" GotKeyboardFocus="OnAddressFocus"
+                     PreviewKeyDown="OnAddressPreviewKeyDown" GotKeyboardFocus="OnAddressFocus"
+                     TextChanged="OnAddressTextChanged" LostKeyboardFocus="OnEntryLostFocus"
                      PreviewMouseLeftButtonDown="OnAddressMouseDown"/>
           </DockPanel>
         </Border>
       </DockPanel>
     </Border>
 
-    <!-- İçerik: web görünümleri ve motorsuz başlangıç sayfası -->
-    <Grid Grid.Row="2" x:Name="ContentHost" Background="{StaticResource Base}">
+    <!-- Adres önerileri: ayrı pencere olduğu için web sayfasının üstünde görünebilir -->
+    <Popup x:Name="SuggestPopup" Placement="Bottom" VerticalOffset="4" AllowsTransparency="True"
+           StaysOpen="True" Focusable="False">
+      <Border x:Name="SuggestRoot" Background="{StaticResource Raised}" BorderBrush="{StaticResource Line}"
+              BorderThickness="1" CornerRadius="12" Padding="5">
+        <ListBox x:Name="SuggestList" Background="Transparent" BorderThickness="0" Focusable="False"
+                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                 PreviewMouseLeftButtonUp="OnSuggestionClick">
+          <ListBox.ItemContainerStyle>
+            <Style TargetType="ListBoxItem">
+              <Setter Property="Focusable" Value="False"/>
+              <Setter Property="Cursor" Value="Hand"/>
+              <Setter Property="Template">
+                <Setter.Value>
+                  <ControlTemplate TargetType="ListBoxItem">
+                    <Border x:Name="Row" Background="Transparent" CornerRadius="8" Padding="11,6">
+                      <ContentPresenter/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                      <Trigger Property="IsMouseOver" Value="True">
+                        <Setter TargetName="Row" Property="Background" Value="{StaticResource Hover}"/>
+                      </Trigger>
+                      <Trigger Property="IsSelected" Value="True">
+                        <Setter TargetName="Row" Property="Background" Value="{StaticResource Hover}"/>
+                      </Trigger>
+                    </ControlTemplate.Triggers>
+                  </ControlTemplate>
+                </Setter.Value>
+              </Setter>
+            </Style>
+          </ListBox.ItemContainerStyle>
+          <ListBox.ItemTemplate>
+            <DataTemplate>
+              <StackPanel>
+                <TextBlock Text="{Binding Title}" Foreground="{StaticResource Ink}" TextTrimming="CharacterEllipsis"/>
+                <TextBlock Text="{Binding DisplayUrl}" Foreground="{StaticResource Faint}" FontSize="11.5"
+                           TextTrimming="CharacterEllipsis"/>
+              </StackPanel>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+      </Border>
+    </Popup>
+
+    <Grid Grid.Row="2">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="*"/>
+        <ColumnDefinition Width="Auto"/>
+      </Grid.ColumnDefinitions>
+
+    <!-- Yan panel: sayfanın üstüne binmez, sayfayı daraltır -->
+    <Border x:Name="SidePanel" Grid.Column="1" Width="340" Visibility="Collapsed"
+            Background="{StaticResource Raised}" BorderBrush="{StaticResource Base}" BorderThickness="1,0,0,0">
+      <DockPanel>
+        <DockPanel DockPanel.Dock="Top" Margin="16,10,8,8">
+          <Button DockPanel.Dock="Right" Style="{StaticResource IconButton}" Width="30" Height="30" FontSize="10"
+                  Content="&#xE8BB;" Click="OnClosePanel" ToolTip="Paneli kapat"/>
+          <TextBlock x:Name="PanelTitle" FontFamily="Segoe UI Variable Display, Segoe UI" FontWeight="SemiBold"
+                     FontSize="16" VerticalAlignment="Center"/>
+        </DockPanel>
+
+        <Grid>
+          <!-- Geçmiş -->
+          <DockPanel x:Name="HistorySection" Visibility="Collapsed">
+            <Border DockPanel.Dock="Top" Height="32" CornerRadius="16" Margin="12,0,12,8" Background="{StaticResource Base}"
+                    BorderBrush="{StaticResource Line}" BorderThickness="1">
+              <Grid Margin="13,0">
+                <TextBlock x:Name="HistoryHint" Text="Geçmişte ara" Foreground="{StaticResource Faint}"
+                           VerticalAlignment="Center" IsHitTestVisible="False" Margin="3,0,0,0"/>
+                <TextBox x:Name="HistorySearch" Background="Transparent" BorderThickness="0"
+                         Foreground="{StaticResource Ink}" CaretBrush="{StaticResource Accent}"
+                         SelectionBrush="{StaticResource Accent}" VerticalAlignment="Center"
+                         TextChanged="OnHistorySearchChanged"/>
+              </Grid>
+            </Border>
+            <Button DockPanel.Dock="Bottom" Style="{StaticResource TextAction}" Content="Geçmişi temizle"
+                    Margin="12,6,12,10" Padding="10,7" Click="OnHistoryClear"/>
+            <Grid>
+              <TextBlock x:Name="HistoryEmpty" Foreground="{StaticResource Faint}" TextWrapping="Wrap"
+                         Margin="18,12" Visibility="Collapsed"/>
+              <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <ItemsControl x:Name="HistoryList" Margin="8,0">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                      <Border x:Name="Row" Background="Transparent" CornerRadius="8" Padding="10,6,4,6" Cursor="Hand"
+                              Tag="{Binding}" MouseLeftButtonUp="OnHistoryRowClick" ToolTip="{Binding Url}">
+                        <DockPanel>
+                          <Button x:Name="Remove" DockPanel.Dock="Right" Style="{StaticResource IconButton}" Width="26" Height="26"
+                                  FontSize="9" Content="&#xE8BB;" Tag="{Binding}" Click="OnHistoryRemove"
+                                  Visibility="Hidden" ToolTip="Geçmişten sil"/>
+                          <StackPanel>
+                            <TextBlock Text="{Binding Title}" TextTrimming="CharacterEllipsis"/>
+                            <DockPanel>
+                              <TextBlock DockPanel.Dock="Right" Text="{Binding When}" Foreground="{StaticResource Faint}"
+                                         FontSize="11.5" Margin="8,0,0,0"/>
+                              <TextBlock Text="{Binding DisplayUrl}" Foreground="{StaticResource Faint}" FontSize="11.5"
+                                         TextTrimming="CharacterEllipsis"/>
+                            </DockPanel>
+                          </StackPanel>
+                        </DockPanel>
+                      </Border>
+                      <DataTemplate.Triggers>
+                        <Trigger SourceName="Row" Property="IsMouseOver" Value="True">
+                          <Setter TargetName="Row" Property="Background" Value="{StaticResource Hover}"/>
+                          <Setter TargetName="Remove" Property="Visibility" Value="Visible"/>
+                        </Trigger>
+                      </DataTemplate.Triggers>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </ScrollViewer>
+            </Grid>
+          </DockPanel>
+
+          <!-- İndirmeler -->
+          <Grid x:Name="DownloadsSection" Visibility="Collapsed">
+            <TextBlock x:Name="DownloadsEmpty" Text="İndirdiğin dosyalar burada görünür." Foreground="{StaticResource Faint}"
+                       TextWrapping="Wrap" Margin="18,6"/>
+            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+              <ItemsControl x:Name="DownloadsList" Margin="8,0">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate>
+                    <Border x:Name="Row" Background="Transparent" CornerRadius="8" Padding="10,7,4,7" Cursor="Hand"
+                            Tag="{Binding}" MouseLeftButtonUp="OnDownloadOpen" ToolTip="{Binding FilePath}">
+                      <DockPanel>
+                        <Button DockPanel.Dock="Right" Style="{StaticResource IconButton}" Width="26" Height="26" FontSize="9"
+                                Content="&#xE8BB;" Tag="{Binding}" Click="OnDownloadDismiss" ToolTip="İptal et ya da listeden kaldır"/>
+                        <Button DockPanel.Dock="Right" Style="{StaticResource IconButton}" Width="26" Height="26" FontSize="12"
+                                Content="&#xE8B7;" Tag="{Binding}" Click="OnDownloadFolder" ToolTip="Klasörde göster"/>
+                        <StackPanel Margin="0,0,6,0">
+                          <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis"/>
+                          <TextBlock Text="{Binding Status}" Foreground="{StaticResource Faint}" FontSize="11.5"
+                                     TextTrimming="CharacterEllipsis"/>
+                          <ProgressBar x:Name="Bar" Style="{StaticResource ThinProgress}" Value="{Binding Progress}"
+                                       Margin="0,5,0,1" Visibility="Collapsed"/>
+                        </StackPanel>
+                      </DockPanel>
+                    </Border>
+                    <DataTemplate.Triggers>
+                      <Trigger SourceName="Row" Property="IsMouseOver" Value="True">
+                        <Setter TargetName="Row" Property="Background" Value="{StaticResource Hover}"/>
+                      </Trigger>
+                      <DataTrigger Binding="{Binding ShowBar}" Value="True">
+                        <Setter TargetName="Bar" Property="Visibility" Value="Visible"/>
+                      </DataTrigger>
+                    </DataTemplate.Triggers>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </ScrollViewer>
+          </Grid>
+
+          <!-- Favoriler -->
+          <Grid x:Name="FavoritesSection" Visibility="Collapsed">
+            <TextBlock x:Name="FavoritesEmpty" Text="Bir sayfayı eklemek için adres çubuğundaki yıldıza tıkla."
+                       Foreground="{StaticResource Faint}" TextWrapping="Wrap" Margin="18,6"/>
+            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+              <ItemsControl x:Name="FavoritesEditor" Margin="8,0">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate>
+                    <Border x:Name="Row" Background="Transparent" CornerRadius="8" Padding="8,5,4,5" ToolTip="{Binding Url}">
+                      <DockPanel>
+                        <Button DockPanel.Dock="Right" Style="{StaticResource IconButton}" Width="26" Height="26" FontSize="9"
+                                Content="&#xE8BB;" Tag="{Binding}" Click="OnFavoriteRemove" ToolTip="Favorilerden çıkar"/>
+                        <Button DockPanel.Dock="Right" Style="{StaticResource IconButton}" Width="26" Height="26" FontSize="10"
+                                Content="&#xE70D;" Tag="{Binding}" Click="OnFavoriteDown" ToolTip="Aşağı taşı"/>
+                        <Button DockPanel.Dock="Right" Style="{StaticResource IconButton}" Width="26" Height="26" FontSize="10"
+                                Content="&#xE70E;" Tag="{Binding}" Click="OnFavoriteUp" ToolTip="Yukarı taşı"/>
+                        <Button DockPanel.Dock="Left" Style="{StaticResource IconButton}" Width="26" Height="26" FontSize="11"
+                                Margin="0,0,6,0" Content="&#xE8A7;" Tag="{Binding}" Click="OnFavoriteOpen" ToolTip="Aç"/>
+                        <TextBox Text="{Binding Title, UpdateSourceTrigger=PropertyChanged}" Background="Transparent" BorderThickness="0"
+                                 Foreground="{StaticResource Ink}" CaretBrush="{StaticResource Accent}"
+                                 SelectionBrush="{StaticResource Accent}" VerticalAlignment="Center"
+                                 TextChanged="OnFavoriteRenamed" KeyDown="OnFavoriteTitleKeyDown"/>
+                      </DockPanel>
+                    </Border>
+                    <DataTemplate.Triggers>
+                      <Trigger SourceName="Row" Property="IsMouseOver" Value="True">
+                        <Setter TargetName="Row" Property="Background" Value="{StaticResource Hover}"/>
+                      </Trigger>
+                    </DataTemplate.Triggers>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </ScrollViewer>
+          </Grid>
+        </Grid>
+      </DockPanel>
+    </Border>
+
+    <!-- İçerik: web görünümleri, motorsuz başlangıç ve hata sayfaları -->
+    <Grid Grid.Column="0" x:Name="ContentHost" Background="{StaticResource Base}">
+      <Grid x:Name="ErrorPage" Visibility="Collapsed">
+        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="480" Margin="24,-40,24,0">
+          <Image Height="130" HorizontalAlignment="Center" Margin="0,0,0,18">
+            <Image.Source><BitmapImage UriSource="Assets/mascot-question.png" DecodePixelHeight="260"/></Image.Source>
+          </Image>
+          <TextBlock Text="Bu sayfa açılamadı" FontFamily="Segoe UI Variable Display, Segoe UI" FontWeight="SemiBold"
+                     FontSize="24" HorizontalAlignment="Center"/>
+          <TextBlock x:Name="ErrorMessage" Foreground="{StaticResource Muted}" FontSize="14" TextWrapping="Wrap"
+                     TextAlignment="Center" Margin="0,8,0,4"/>
+          <TextBlock x:Name="ErrorUrl" Foreground="{StaticResource Faint}" TextTrimming="CharacterEllipsis"
+                     HorizontalAlignment="Center" Margin="0,0,0,20"/>
+          <Button Style="{StaticResource TextAction}" Background="{StaticResource Raised}" Content="Yeniden dene"
+                  HorizontalAlignment="Center" Padding="18,9" FontSize="13.5" Click="OnRetry"/>
+        </StackPanel>
+      </Grid>
       <Grid x:Name="StartPage">
         <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Width="560" Margin="24,-60,24,0">
           <!-- Sekmeler uyurken kedi de uyur -->
@@ -151,7 +365,7 @@
                      Foreground="{StaticResource Ink}" HorizontalAlignment="Center"/>
           <TextBlock x:Name="StartRam" Foreground="{StaticResource Faint}" FontSize="12.5"
                      HorizontalAlignment="Center" Margin="0,2,0,24"/>
-          <Border Height="46" CornerRadius="23" Background="{StaticResource Raised}"
+          <Border x:Name="StartBorder" Height="46" CornerRadius="23" Background="{StaticResource Raised}"
                   BorderBrush="{StaticResource Line}" BorderThickness="1" Margin="0,0,0,30">
             <Grid Margin="20,0">
               <TextBlock x:Name="StartHint" Text="Ara ya da adres yaz" Foreground="{StaticResource Faint}"
@@ -159,7 +373,8 @@
               <TextBox x:Name="StartSearch" Background="Transparent" BorderThickness="0" FontSize="14"
                        Foreground="{StaticResource Ink}" CaretBrush="{StaticResource Accent}"
                        SelectionBrush="{StaticResource Accent}" VerticalAlignment="Center"
-                       KeyDown="OnStartKeyDown" TextChanged="OnStartTextChanged"/>
+                       PreviewKeyDown="OnStartPreviewKeyDown" TextChanged="OnStartTextChanged"
+                       LostKeyboardFocus="OnEntryLostFocus"/>
             </Grid>
           </Border>
           <ItemsControl x:Name="FavoritesList" HorizontalAlignment="Center">
@@ -192,6 +407,7 @@
           </ItemsControl>
         </StackPanel>
       </Grid>
+    </Grid>
     </Grid>
   </Grid>
 </Window>
