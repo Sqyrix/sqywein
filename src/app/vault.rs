@@ -42,8 +42,18 @@ impl App {
 
     // ---------- Sayfalardaki giriş formları ----------
 
-    pub(super) fn on_password_message(&mut self, tab_id: u32, source: &str, json: &str) {
+    pub(super) fn on_password_message(&mut self, tab_id: u32, frame: Option<ICoreWebView2Frame>, source: &str, json: &str) {
         let Ok(msg) = serde_json::from_str::<Value>(json) else { return };
+        crate::log::line(&format!("ŞİFRE #{tab_id} {} {} {}", msg["type"].as_str().unwrap_or("?"), if frame.is_some() { "çerçeve" } else { "sayfa" }, url::host(source)));
+        // Yanıt, mesajı gönderen çerçeveye (iframe) ya da sayfaya gider.
+        let send = |app: &App, msg: Value| match &frame {
+            Some(f) => {
+                if let Ok(f2) = f.cast::<ICoreWebView2Frame2>() {
+                    unsafe { let _ = f2.PostWebMessageAsJson(&HSTRING::from(msg.to_string())); }
+                }
+            }
+            None => app.reply(tab_id, msg),
+        };
         if !self.state.settings.save_passwords || self.index_of(tab_id).is_some_and(|i| self.tabs[i].private && msg["type"] == "pw.submitted") {
             return;
         }
@@ -51,7 +61,7 @@ impl App {
             "pw.query" => {
                 let accounts: Vec<Value> = self.vault.matches(source).iter().map(|c| json!({ "id": c.id, "username": c.username })).collect();
                 if !accounts.is_empty() {
-                    self.reply(tab_id, json!({ "type": "pw.accounts", "accounts": accounts }));
+                    send(self, json!({ "type": "pw.accounts", "accounts": accounts }));
                 }
             }
             "pw.fill" => {
@@ -61,7 +71,7 @@ impl App {
                 if let Some((username, password)) = found {
                     self.vault.touch(id);
                     self.save_vault();
-                    self.reply(tab_id, json!({ "type": "pw.secret", "id": id, "username": username, "password": password }));
+                    send(self, json!({ "type": "pw.secret", "id": id, "username": username, "password": password }));
                 }
             }
             "pw.submitted" => {

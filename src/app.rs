@@ -2169,7 +2169,7 @@ impl App {
             Event::Cosmetic(id, classes, ids) => self.on_cosmetic(id, classes, ids),
             Event::ScriptAdded(id, slot, script) => self.on_script_added(id, slot, script),
             Event::StoreInstall(id) => self.install_store(id),
-            Event::Password(id, source, json) => self.on_password_message(id, &source, &json),
+            Event::Password(id, frame, source, json) => self.on_password_message(id, frame, &source, &json),
             Event::Zoom(id) => {
                 if let Some(i) = self.index_of(id) {
                     self.on_zoom_changed(i);
@@ -2212,7 +2212,7 @@ impl App {
             }
             return;
         };
-        let view = match engine::configure(&ctrl, id, BASE, &self.state.settings) {
+        let view = match engine::configure(&ctrl, id, 0xFFFFFF, &self.state.settings) {
             Ok(v) => v,
             Err(_) => {
                 unsafe { let _ = ctrl.Close(); }

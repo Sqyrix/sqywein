@@ -47,8 +47,8 @@ pub enum Event {
     WebMessage(u32, String),
     /// Mağazadaki "Chrome'a ekle" düğmesine basıldı: uzantının mağaza kimliği.
     StoreInstall(String),
-    /// Sayfadaki giriş formundan gelen mesaj: (sekme, belgenin adresi, JSON).
-    Password(u32, String, String),
+    /// Sayfadaki giriş formundan gelen mesaj: (sekme, çerçeve (iframe ise), belgenin adresi, JSON).
+    Password(u32, Option<ICoreWebView2Frame>, String, String),
     /// İndirme başladı: (indirmeyi başlatan sekme, işlem).
     DownloadStarted(u32, ICoreWebView2DownloadOperation),
     DownloadChanged(u32),
@@ -284,7 +284,7 @@ pub fn configure(ctrl: &ICoreWebView2Controller, id: u32, background: u32, prefs
                 }
                 let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) else { return Ok(()) };
                 if v["type"].as_str().is_some_and(|t| t.starts_with("pw.")) {
-                    push(Event::Password(id, source, json));
+                    push(Event::Password(id, None, source, json));
                 } else if v["type"] == "sq.cosmetic" {
                     // Herhangi bir sayfadan gelebilir: yalnızca sınırlı sayıda metin kabul edilir.
                     let names = |k: &str| -> Vec<String> {
@@ -323,6 +323,39 @@ pub fn configure(ctrl: &ICoreWebView2Controller, id: u32, background: u32, prefs
             })),
             &mut token,
         )?;
+        // Çerçeveler (iframe): Apple, Microsoft gibi siteler giriş formunu iframe içinde açar;
+        // şifre yöneticisi oradan da mesaj alır ve yanıtı aynı çerçeveye gönderir.
+        if let Ok(v4) = view.cast::<ICoreWebView2_4>() {
+            v4.add_FrameCreated(
+                &FrameCreatedEventHandler::create(Box::new(move |_, args| {
+                    let Some(args) = args else { return Ok(()) };
+                    let frame = args.Frame()?;
+                    let Ok(f2) = frame.cast::<ICoreWebView2Frame2>() else { return Ok(()) };
+                    let mut t = Default::default();
+                    f2.add_WebMessageReceived(
+                        &FrameWebMessageReceivedEventHandler::create(Box::new(move |frame, args| {
+                            let (Some(frame), Some(args)) = (frame, args) else { return Ok(()) };
+                            let mut source = PWSTR::null();
+                            args.Source(&mut source)?;
+                            let mut json = PWSTR::null();
+                            args.WebMessageAsJson(&mut json)?;
+                            let json = take_pwstr(json);
+                            let is_pw = serde_json::from_str::<serde_json::Value>(&json)
+                                .ok()
+                                .and_then(|v| v["type"].as_str().map(|t| t.starts_with("pw.")))
+                                .unwrap_or(false);
+                            if is_pw {
+                                push(Event::Password(id, Some(frame), take_pwstr(source), json));
+                            }
+                            Ok(())
+                        })),
+                        &mut t,
+                    )?;
+                    Ok(())
+                })),
+                &mut token,
+            )?;
+        }
         // İndirmeler kendi göstergemizde ve sayfamızda izlenir; motorun kutusu açılmaz.
         if let Ok(v4) = view.cast::<ICoreWebView2_4>() {
             v4.add_DownloadStarting(

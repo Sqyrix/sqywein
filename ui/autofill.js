@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  if (window.top !== window || !window.chrome?.webview || location.origin === 'https://sqywein.ui' || window.__sqPw) return;
+  if (!window.chrome?.webview || location.origin === 'https://sqywein.ui' || window.__sqPw) return;
   window.__sqPw = true;
   const bridge = window.chrome.webview;
   const send = message => bridge.postMessage(message);
@@ -17,6 +17,17 @@
       (!password.form || input.form === password.form) && (input.compareDocumentPosition(password) & Node.DOCUMENT_POSITION_FOLLOWING));
     return {password, username: candidates.filter(input => /(?:^|\s)(username|email)(?:\s|$)/i.test(input.autocomplete)).pop() || candidates.pop() || null};
   }
+  // İki adımlı girişte (önce e-posta, sonra şifre) seçilen hesap ve yazılan ad hatırlanır.
+  const memory = {
+    get() { try { return JSON.parse(sessionStorage.getItem('__sqPwUser') || 'null'); } catch { return null; } },
+    set(v) { try { sessionStorage.setItem('__sqPwUser', JSON.stringify(v)); } catch {} },
+  };
+  const USER_HINT = /user|email|e-mail|login|account|apple.?id|kullan|posta|hesap/i;
+  function loneUsernames() {
+    if ([...document.querySelectorAll('input[type="password"]')].some(visible)) return [];
+    return [...document.querySelectorAll('input')].filter(input => visible(input) && ['text','email','tel'].includes(input.type) &&
+      (/(?:^|\s)(username|email)(?:\s|$)/i.test(input.autocomplete) || input.type === 'email' || USER_HINT.test(input.name + ' ' + input.id + ' ' + (input.getAttribute('aria-label') || ''))));
+  }
   function close() {
     popup?.remove(); popup = null; options = [];
     for (const input of active ? [active.username, active.password] : []) {
@@ -25,13 +36,15 @@
   }
   function fill(target, account) {
     close();
-    if (!target || !visible(target.password)) return;
+    if (!target || !(visible(target.password) || visible(target.username))) return;
     pending = {id:account.id, target};
+    memory.set({id:account.id, username:account.username});
     send({type:'pw.fill', id:account.id});
   }
   function show(target, anchor) {
     close(); active = target;
-    if (accounts.length < 2 || !visible(anchor)) return;
+    // Tek hesapta da e-posta adımında öneri gösterilir; şifre adımında doğrudan dolar.
+    if (!accounts.length || (accounts.length < 2 && target.password) || !visible(anchor)) return;
     const rect = anchor.getBoundingClientRect();
     // Liste alanın altına yerleşir; kapalı gölge kökü site stillerinden ayrılır.
     popup = document.createElement('div');
@@ -62,7 +75,7 @@
   }
   function capture(target) {
     if (!target || !visible(target.password) || !target.password.value) return;
-    const username = target.username?.value || '', password = target.password.value;
+    const username = target.username?.value || memory.get()?.username || '', password = target.password.value;
     const key = JSON.stringify([username,password]), time = Date.now();
     if (time - (submitted.get(key) || 0) < 2000) return;
     // Sadece kısa süreli yinelenen gönderimler tutulur.
@@ -71,7 +84,22 @@
   }
   function scan() {
     const passwords = [...document.querySelectorAll('input[type="password"]')].filter(visible);
-    if (passwords.length && !queried) { queried = true; send({type:'pw.query'}); }
+    const lone = loneUsernames();
+    if ((passwords.length || lone.length) && !queried) { queried = true; send({type:'pw.query'}); }
+    for (const username of lone) {
+      if (usernames.has(username)) continue;
+      usernames.add(username);
+      const target = {username, password:null};
+      username.addEventListener('focus',() => { active = target; show(target,username); });
+      username.addEventListener('keydown',event => keyboard(event,target));
+      // Sonraki adıma geçerken yazılan ad hatırlanır (şifreyi kaydederken lazım).
+      username.addEventListener('change',() => { if (username.value) memory.set({id:memory.get()?.id ?? null, username:username.value}); });
+    }
+    // Şifre adımı geldi ve önceki adımda hesap seçildiyse kendiliğinden doldurulur.
+    const remembered = memory.get();
+    if (passwords.length && remembered?.id != null && accounts.some(a => a.id === remembered.id) && !passwords[0].value && !pending) {
+      fill(pair(passwords[0]), accounts.find(a => a.id === remembered.id));
+    }
     for (const password of passwords) {
       if (!fields.has(password)) {
         fields.add(password);
@@ -97,11 +125,15 @@
       close();
       const passwords = [...document.querySelectorAll('input[type="password"]')].filter(visible);
       const target = passwords.find(p => p === document.activeElement || pair(p).username === document.activeElement) || passwords[0];
-      if (accounts.length === 1 && target) fill(pair(target),accounts[0]);
+      const remembered = memory.get();
+      const chosen = remembered?.id != null && accounts.find(a => a.id === remembered.id);
+      if (target && chosen) fill(pair(target),chosen);
+      else if (accounts.length === 1 && target) fill(pair(target),accounts[0]);
       else if (target && (document.activeElement === target || pair(target).username === document.activeElement)) show(pair(target),document.activeElement);
+      else { const lone = loneUsernames().find(u => u === document.activeElement); if (lone) { active = {username:lone, password:null}; show(active,lone); } }
     } else if (message.type === 'pw.secret' && pending && message.id === pending.id && typeof message.username === 'string' && typeof message.password === 'string') {
       const target = pending.target; pending = null;
-      if (!visible(target.password)) return;
+      if (!visible(target.password) && !visible(target.username)) return;
       for (const [input,value] of [[target.username,message.username],[target.password,message.password]]) {
         if (!input || !visible(input)) continue;
         nativeSet.call(input,value); input.dispatchEvent(new Event('input',{bubbles:true})); input.dispatchEvent(new Event('change',{bubbles:true}));
