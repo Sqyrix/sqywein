@@ -31,6 +31,7 @@ pub enum MenuKind {
     BarOverflow,
     Shield,
     SavePassword,
+    TabContext,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -65,6 +66,14 @@ pub enum MenuCmd {
     SavePassword,
     NeverSavePassword,
     DismissPassword,
+    TabNewRight,
+    TabReload,
+    TabDuplicate,
+    TabSleep,
+    TabSleepOthers,
+    TabCloseOthers,
+    TabCloseRight,
+    TabClose,
 }
 
 /// İndirme baloncuğundaki bir satır.

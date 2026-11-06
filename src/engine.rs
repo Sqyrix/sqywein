@@ -49,7 +49,8 @@ pub enum Event {
     StoreInstall(String),
     /// Sayfadaki giriş formundan gelen mesaj: (sekme, belgenin adresi, JSON).
     Password(u32, String, String),
-    DownloadStarted(ICoreWebView2DownloadOperation),
+    /// İndirme başladı: (indirmeyi başlatan sekme, işlem).
+    DownloadStarted(u32, ICoreWebView2DownloadOperation),
     DownloadChanged(u32),
     /// Gizli hesap görünümünde çalıştırılan betiğin sonucu.
     Script(u32, String),
@@ -191,6 +192,8 @@ pub fn configure(ctrl: &ICoreWebView2Controller, id: u32, background: u32, prefs
 
         let settings = view.Settings()?;
         settings.SetIsStatusBarEnabled(true)?;
+        // Hatalarda motorun (Edge'in) sayfası değil, Sqywein'in kendi sayfası görünür.
+        settings.SetIsBuiltInErrorPageEnabled(false)?;
         if let Ok(s4) = settings.cast::<ICoreWebView2Settings4>() {
             // Şifreleri motorun kendi deposu değil, Sqywein'in şifre yöneticisi saklar.
             let _ = s4.SetIsPasswordAutosaveEnabled(false);
@@ -326,7 +329,7 @@ pub fn configure(ctrl: &ICoreWebView2Controller, id: u32, background: u32, prefs
                 &DownloadStartingEventHandler::create(Box::new(move |_, args| {
                     let Some(args) = args else { return Ok(()) };
                     args.SetHandled(true)?;
-                    push(Event::DownloadStarted(args.DownloadOperation()?));
+                    push(Event::DownloadStarted(id, args.DownloadOperation()?));
                     Ok(())
                 })),
                 &mut token,
@@ -342,6 +345,7 @@ pub fn configure(ctrl: &ICoreWebView2Controller, id: u32, background: u32, prefs
                 let uri = take_pwstr(uri);
                 // Engelleyici sayacı ve "bu sayfa" bilgisi istekler başlamadan güncellenir.
                 crate::adblock::set_page(id, &uri);
+                crate::log::line(&format!("GEZİNME #{id} {uri}"));
                 push(Event::NavStarting(id, uri));
                 Ok(())
             })),
@@ -515,8 +519,7 @@ pub fn process_ids(env: &ICoreWebView2Environment) -> Vec<u32> {
 /// Kullanıcıya gösterilecek hata; `None` ise ekran değişmez (ör. iptal edilen yükleme, indirme).
 pub fn describe_error(status: COREWEBVIEW2_WEB_ERROR_STATUS) -> Option<&'static str> {
     Some(match status {
-        COREWEBVIEW2_WEB_ERROR_STATUS_UNKNOWN
-        | COREWEBVIEW2_WEB_ERROR_STATUS_OPERATION_CANCELED
+        COREWEBVIEW2_WEB_ERROR_STATUS_OPERATION_CANCELED
         | COREWEBVIEW2_WEB_ERROR_STATUS_CONNECTION_ABORTED
         | COREWEBVIEW2_WEB_ERROR_STATUS_VALID_AUTHENTICATION_CREDENTIALS_REQUIRED
         | COREWEBVIEW2_WEB_ERROR_STATUS_VALID_PROXY_AUTHENTICATION_REQUIRED => return None,

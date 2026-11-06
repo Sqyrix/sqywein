@@ -9,6 +9,7 @@ mod hello;
 mod history;
 mod image;
 mod keys;
+mod log;
 mod memory;
 mod menu;
 mod net;

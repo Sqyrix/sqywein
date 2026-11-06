@@ -150,6 +150,9 @@ pub struct AppState {
     /// Site → filtreleme modu (varsayılandan farklıysa).
     #[serde(default)]
     pub adblock_levels: BTreeMap<String, u8>,
+    /// Pencerenin son konumu: [sol, üst, sağ, alt, ekranı kaplıyor mu].
+    #[serde(default)]
+    pub window: Option<[i32; 5]>,
     #[serde(default)]
     pub download_list: Vec<DownloadRecord>,
     /// Bizim kurduğumuz uzantıların klasörleri: uzantı kimliği → klasör.

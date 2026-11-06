@@ -10,6 +10,7 @@ mod pages;
 mod session;
 mod shield;
 mod suggest;
+mod tabs;
 mod vault;
 
 use crate::{
@@ -90,6 +91,8 @@ struct Tab {
     /// Engelleyicinin belge betikleri (sayfa gizleme, YouTube) ve genel kural istisnaları.
     ad_scripts: [Option<String>; 2],
     ad_exceptions: Option<(bool, HashSet<String>)>,
+    /// En az bir sayfa yüklendi mi? (Yalnızca indirme için açılan sekmeleri tanımak için.)
+    has_loaded: bool,
     /// Uygulanan yakınlaştırma ve hangi site için uygulandığı.
     zoom: f64,
     zoom_host: String,
@@ -119,6 +122,7 @@ impl Tab {
             can_forward: false,
             icon: None,
             private: false,
+            has_loaded: false,
             ad_scripts: [None, None],
             ad_exceptions: None,
             zoom: 1.0,
@@ -329,6 +333,17 @@ pub struct App {
     hello_pending: Vec<(u32, vault::Gate)>,
     hello_request: u32,
     favicon_urls: RefCell<HashMap<String, String>>,
+    // Sekme davranışları
+    context_tab: u32,
+    menu_anchor: Option<POINT>,
+    drag: Option<tabs::Drag>,
+    tooltip: HWND,
+    tooltip_text: HSTRING,
+    /// İndirme → başlatan sekme; indirmesi süren kapalı sekmelerin görünümleri.
+    download_owner: HashMap<u32, u32>,
+    lingering: Vec<(u32, ICoreWebView2Controller)>,
+    ram_line: String,
+    mascot: Option<Rc<Image>>,
 }
 
 // ---------- Uygulama durumuna erişim ----------
@@ -457,9 +472,15 @@ pub fn run() -> Result<()> {
         APP.with(|a| *a.borrow_mut() = Some(app));
 
         // Çerçeve hesabı uygulama hazır olduktan sonra yeniden yapılsın.
-        let _ = SetWindowPos(hwnd, None, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER);
-        let _ = ShowWindow(hwnd, SW_SHOWDEFAULT);
-        with_app(|app| app.start());
+        let _ = SetWindowPos(hwnd, None, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        // Pencere son bırakıldığı yerde ve boyutta açılır.
+        if with_app(|app| app.restore_placement()) != Some(true) {
+            let _ = ShowWindow(hwnd, SW_SHOWDEFAULT);
+        }
+        with_app(|app| {
+            app.create_tooltip();
+            app.start();
+        });
         run_deferred();
 
         let mut msg = MSG::default();
@@ -705,6 +726,15 @@ impl App {
             hello_pending: Vec::new(),
             hello_request: 0,
             favicon_urls: RefCell::new(HashMap::new()),
+            context_tab: 0,
+            menu_anchor: None,
+            drag: None,
+            tooltip: HWND::default(),
+            tooltip_text: HSTRING::new(),
+            download_owner: HashMap::new(),
+            lingering: Vec::new(),
+            ram_line: String::new(),
+            mascot: crate::image::from_bytes(include_bytes!("../Assets/mascot-question.png"), 260).map(Rc::new),
         };
         app.vault = crate::passwords::Vault::load(&app.state.current_profile);
         app.next_download = app.state.download_list.iter().map(|d| d.id).max().unwrap_or(0) + 1;
@@ -760,6 +790,7 @@ impl App {
         unsafe { SetTimer(Some(self.hwnd), TIMER_HOUSEKEEPING, 5000, None) };
         self.load_avatar();
         self.start_adblock();
+        self.update_ram_line();
         self.dirty = false; // Açılışta değişen bir şey yok; gereksiz kayıt yapılmasın.
     }
 
@@ -845,6 +876,11 @@ impl App {
             }
             WM_NCHITTEST => Some(LRESULT(self.hit_test_nc(lparam) as isize)),
             WM_MOUSEMOVE => {
+                if wparam.0 & 0x0001 != 0 && self.drag.is_some() {
+                    let (x, _) = self.point(lparam);
+                    self.drag_move(x);
+                    return Some(LRESULT(0));
+                }
                 let hit = self.hit(lparam);
                 if !self.tracking_mouse {
                     let mut tme = TRACKMOUSEEVENT {
@@ -858,9 +894,22 @@ impl App {
                 }
                 if hit != self.hover {
                     self.hover = hit;
+                    self.update_tooltip();
                     self.invalidate();
                 }
                 Some(LRESULT(0))
+            }
+            WM_RBUTTONUP => {
+                if let Hit::Tab(i) | Hit::TabClose(i) = self.hit(lparam) {
+                    self.open_tab_menu(i);
+                }
+                Some(LRESULT(0))
+            }
+            WM_CAPTURECHANGED => {
+                if self.drag.take().is_some() {
+                    self.animate();
+                }
+                None
             }
             WM_MOUSELEAVE => {
                 self.tracking_mouse = false;
@@ -874,13 +923,22 @@ impl App {
                 self.pressed = hit;
                 self.close_suggest();
                 match hit {
-                    Hit::Tab(i) => self.activate(i), // Basar basmaz geçsin: daha çevik hissettirir.
+                    Hit::Tab(i) => {
+                        self.activate(i); // Basar basmaz geçsin: daha çevik hissettirir.
+                        let (x, _) = self.point(lparam);
+                        self.begin_drag(i, x);
+                    }
                     Hit::None if self.on_start_page() => self.focus_start(),
                     _ => {}
                 }
                 Some(LRESULT(0))
             }
             WM_LBUTTONUP => {
+                if self.end_drag() {
+                    self.pressed = Hit::None;
+                    self.invalidate();
+                    return Some(LRESULT(0));
+                }
                 let hit = self.hit(lparam);
                 if hit == self.pressed {
                     self.click(hit);
@@ -910,6 +968,7 @@ impl App {
                             self.snapshot_cookies();
                         }
                         self.rest_unused_tabs();
+                        self.update_ram_line();
                         if self.dirty {
                             self.save();
                         }
@@ -942,6 +1001,7 @@ impl App {
                 Some(LRESULT(0))
             }
             WM_CLOSE => {
+                self.remember_placement();
                 self.begin_close();
                 Some(LRESULT(0))
             }
@@ -966,6 +1026,7 @@ impl App {
             || self.installing
             || self.download_pulse.is_some_and(|t| t.elapsed() < Duration::from_millis(2400))
             || self.downloads.iter().any(|(id, _)| self.download_record(*id).is_some_and(|d| d.status == "progress"))
+            || self.dragging_id().is_some()
             || self.tabs.iter().any(|t| t.loading || t.open_progress() < 1.0)
             || self.tabs.iter().zip(&targets).any(|(t, r)| t.x != r.x || t.w != r.w)
     }
@@ -976,8 +1037,11 @@ impl App {
         self.last_tick = now;
         let k = 1.0 - (-dt * 20.0).exp();
         let targets = self.layout().tabs;
+        let dragged = self.dragging_id();
         for (t, r) in self.tabs.iter_mut().zip(&targets) {
-            t.x = lerp_toward(t.x, r.x, k);
+            if Some(t.id) != dragged {
+                t.x = lerp_toward(t.x, r.x, k);
+            }
             t.w = lerp_toward(t.w, r.w, k);
         }
         self.ghosts.retain(|g| g.progress() < 1.0);
@@ -1544,10 +1608,17 @@ impl App {
             MenuKind::BarOverflow => (l.bar_more.unwrap_or(l.menu), self.bar_overflow_items()),
             MenuKind::Shield => (l.shield.unwrap_or(l.star), self.shield_menu_items()),
             MenuKind::SavePassword => (l.star, self.save_password_items()),
+            MenuKind::TabContext => (l.menu, self.tab_menu_items()),
         };
-        let r = self.px(anchor_dip);
-        let mut pt = POINT { x: r.right, y: r.bottom + (4.0 * self.scale()) as i32 };
-        unsafe { let _ = ClientToScreen(self.hwnd, &mut pt); }
+        let pt = match self.menu_anchor.take() {
+            Some(pt) => pt,
+            None => {
+                let r = self.px(anchor_dip);
+                let mut pt = POINT { x: r.right, y: r.bottom + (4.0 * self.scale()) as i32 };
+                unsafe { let _ = ClientToScreen(self.hwnd, &mut pt); }
+                pt
+            }
+        };
         let zoom = self.tabs[self.active].ctrl.as_ref().map(|_| self.tabs[self.active].zoom);
         if let Ok(m) = Menu::open(self.hwnd, kind, pt, self.dpi, items, zoom, self.gfx.hardware) {
             let hwnd = m.hwnd;
@@ -1670,6 +1741,14 @@ impl App {
             }
             MenuCmd::Store => self.new_tab("https://chromewebstore.google.com/".into(), None),
             MenuCmd::OpenBookmark(i) => self.open_bookmark(i, false),
+            MenuCmd::TabNewRight
+            | MenuCmd::TabReload
+            | MenuCmd::TabDuplicate
+            | MenuCmd::TabSleep
+            | MenuCmd::TabSleepOthers
+            | MenuCmd::TabCloseOthers
+            | MenuCmd::TabCloseRight
+            | MenuCmd::TabClose => self.tab_command(cmd),
             MenuCmd::SavePassword => self.save_pending_login(false),
             MenuCmd::NeverSavePassword => self.save_pending_login(true),
             MenuCmd::DismissPassword => self.pending_login = None,
@@ -1756,10 +1835,12 @@ impl App {
         }
         let mut tab = self.tabs.remove(i);
         crate::adblock::forget(tab.id);
-        if !tab.url.is_empty() && !tab.private {
+        if !tab.url.is_empty() && !tab.private && tab.has_loaded {
             self.closed.push(tab.url.clone());
         }
-        tab.close_view();
+        if !self.keep_for_download(&mut tab) {
+            tab.close_view();
+        }
         self.dirty = true;
 
         if self.tabs.is_empty() {
@@ -1963,6 +2044,10 @@ impl App {
                 let Some(i) = self.index_of(id) else { return };
                 let tab = &mut self.tabs[i];
                 tab.loading = false;
+                if ok {
+                    tab.has_loaded = true;
+                }
+                crate::log::line(&format!("YÜKLENDİ #{id} {} {}", if ok { "tamam" } else { "hata" }, status.0));
                 let (u, t, private) = (tab.url.clone(), tab.title.clone(), tab.private);
                 if ok && !u.is_empty() && !private && !url::is_internal(&u) {
                     self.history.record(&u, &t);
@@ -2091,7 +2176,7 @@ impl App {
                 }
             }
             Event::WebMessage(id, json) => self.on_web_message(id, &json),
-            Event::DownloadStarted(op) => self.on_download_started(op),
+            Event::DownloadStarted(id, op) => self.on_download_started(id, op),
             Event::DownloadChanged(id) => self.on_download_changed(id),
             Event::Script(id, result) => {
                 if id == ACCOUNT_VIEW {
@@ -2303,6 +2388,11 @@ impl App {
         } else if let Some(err) = &tab.error {
             g.round(l.content, 10.0, RAISED);
             let (cx, cy) = (l.content.x, l.content.cy());
+            if let Some(m) = &self.mascot {
+                let h = 120.0;
+                let w = h * m.width as f32 / m.height as f32;
+                g.image(m, Rect::new(l.content.cx() - w / 2.0, cy - 60.0 - h, w, h), false);
+            }
             g.text("Sayfa açılamadı", Rect::new(cx, cy - 40.0, l.content.w, 28.0), Font::UiBold, INK, Align::Center);
             g.text(err, Rect::new(cx, cy - 10.0, l.content.w, 24.0), Font::Ui, MUTED, Align::Center);
             g.round(l.retry, 10.0, if self.hover == Hit::Retry { INK } else { ACCENT });
@@ -2374,7 +2464,8 @@ impl App {
         }
         let shown = self.shown_tabs(l);
         for (i, (tab, r)) in self.tabs.iter().zip(&shown).enumerate() {
-            g.set_opacity(tab.open_progress());
+            let asleep = tab.ctrl.is_none() && !tab.url.is_empty() && i != self.active;
+            g.set_opacity(tab.open_progress() * if asleep && !matches!(self.hover, Hit::Tab(h) if h == i) { 0.55 } else { 1.0 });
             let hovered = matches!(self.hover, Hit::Tab(h) | Hit::TabClose(h) if h == i);
             // Henüz yüklenmemiş (uyuyan) sekmeler de diskteki simgesiyle görünür.
             let icon = if tab.private { tab.icon.clone() } else { tab.icon.clone().or_else(|| self.icon_for(&tab.url)) };

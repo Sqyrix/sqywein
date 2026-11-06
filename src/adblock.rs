@@ -185,6 +185,9 @@ pub fn should_block(tab: u32, url: &str, kind: &str) -> bool {
     let block = ENGINE.with(|e| check(e, &req)) || (level >= COMPLETE && ANNOY.with(|e| check(e, &req)));
     if block {
         BLOCKED.with(|b| *b.borrow_mut().entry(tab).or_insert(0) += 1);
+        if crate::log::enabled() {
+            crate::log::line(&format!("ENGEL #{tab} {kind} {url}"));
+        }
     }
     block
 }

@@ -297,8 +297,9 @@ impl App {
         Some(if total > 0 { got as f32 / total as f32 } else { 0.0 })
     }
 
-    pub(super) fn on_download_started(&mut self, op: ICoreWebView2DownloadOperation) {
+    pub(super) fn on_download_started(&mut self, tab: u32, op: ICoreWebView2DownloadOperation) {
         let id = self.next_download;
+        self.download_owner.insert(id, tab);
         self.next_download += 1;
         let path = engine::string(|p| unsafe { op.ResultFilePath(p) });
         let link = engine::string(|p| unsafe { op.Uri(p) });
@@ -317,6 +318,9 @@ impl App {
         self.layout_children();
         self.animate();
         self.push_download(id);
+        crate::log::line(&format!("İNDİRME #{tab} {}", self.download_record(id).map(|d| d.url.clone()).unwrap_or_default()));
+        // Yalnızca indirme için açılan boş sekme kapanır (görünümü indirme bitene kadar yaşar).
+        self.close_download_only_tab(tab);
         // Chrome gibi: indirme başlayınca baloncuk kendiliğinden açılır.
         self.open_menu(MenuKind::Downloads);
         self.invalidate();
@@ -393,6 +397,7 @@ impl App {
         }
         if matches!(status, "done" | "failed" | "canceled") {
             self.downloads.retain(|(d, _)| *d != id);
+            self.release_lingering();
             self.dirty = true;
             if status == "done" && was != "done" {
                 self.download_pulse = Some(Instant::now());

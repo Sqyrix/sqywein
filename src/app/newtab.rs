@@ -13,7 +13,7 @@ const DIALOG_H: f32 = 214.0;
 const NAME_ID: i32 = 201;
 const URL_ID: i32 = 202;
 
-static LOGO_PNG: &[u8] = include_bytes!("../../../Assets/logo.png");
+static LOGO_PNG: &[u8] = include_bytes!("../../Assets/logo.png");
 
 pub(super) struct StartLayout {
     pub logo: Rect,
@@ -138,13 +138,13 @@ impl App {
         let count = n.min(MAX_TILES) + usize::from(n < MAX_TILES);
         let cols = count.clamp(1, 5);
         let rows = count.div_ceil(5);
-        let block = 72.0 + 6.0 + 40.0 + 24.0 + 54.0 + 30.0 + rows as f32 * TILE_H;
+        let block = 72.0 + 6.0 + 40.0 + 34.0 + 54.0 + 30.0 + rows as f32 * TILE_H;
         let top = (content.cy() - block / 2.0).max(content.y + 24.0);
         let cx = content.cx();
         let logo = Rect::new(cx - 36.0, top, 72.0, 72.0);
         let title = Rect::new(content.x, logo.bottom() + 6.0, content.w, 40.0);
         let search_w = (content.w - 64.0).clamp(120.0, 600.0);
-        let search = Rect::new(cx - search_w / 2.0, title.bottom() + 24.0, search_w, 54.0);
+        let search = Rect::new(cx - search_w / 2.0, title.bottom() + 34.0, search_w, 54.0);
         let mut tiles = Vec::new();
         let y0 = search.bottom() + 30.0;
         for k in 0..count {
@@ -169,6 +169,10 @@ impl App {
             None => g.circle(s.logo.cx(), s.logo.cy(), 30.0, ACCENT),
         }
         g.text(if private { "Gizli sekme" } else { "Sqywein" }, s.title, Font::Big, INK, Align::Center);
+        if !private && !self.ram_line.is_empty() {
+            // Hafiflik görünür olsun: şu anki bellek ve uyuyan sekmeler.
+            g.text(&self.ram_line, Rect::new(l.content.x, s.title.bottom() + 2.0, l.content.w, 18.0), Font::Small, FAINT, Align::Center);
+        }
 
         let r = s.search;
         let focused = unsafe { GetFocus() } == self.start_edit;

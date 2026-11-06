@@ -32,7 +32,7 @@ Toplam = kabuk + motorun tüm süreçleri (özel çalışma kümesi). Açılış
 
 | Konu | Karar | Neden |
 |---|---|---|
-| Dil | Rust (stable), tek crate, `rust/` klasörü | Eşitlik sağlanana kadar C# sürümü yanında durur |
+| Dil | Rust (stable), tek crate, repo kökünde | C# sürümü 7 Kasım 2026'da kaldırıldı; tüm özellikleri Rust'ta |
 | Pencere | Saf Win32 (`windows` crate), kendi başlık çubuğumuz (DWM + `WM_NCCALCSIZE`) | En hafif yol; tasarımda tam özgürlük |
 | Arayüz çizimi | Direct2D + DirectWrite, kendi küçük widget katmanımız | HTML arayüz ayrı renderer süreci (~30 MB) demek; kendi çizimimizle Zen/Arc tarzı özgün tasarım yine mümkün |
 | Motor | WebView2 (`webview2-com`), tek `CoreWebView2Environment`, sekme başına bir controller | Site uyumluluğu %100; Windows'ta zaten kurulu |

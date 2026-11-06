@@ -1,7 +1,3 @@
-bin/
-obj/
-*.user
-.vs/
 
 # Rust
-rust/target/
+target/
