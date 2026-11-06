@@ -1,0 +1,24 @@
+# Bearbyte'a gönderilmeyecek dosyalar (her satır bir kural, * joker)
+.git
+node_modules
+.gradle
+.idea
+.vscode
+android/**/build
+android/.gradle
+*.log
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# Rust derleme çıktıları (birkaç GB; calistir.cmd bunları zaten proje dışında tutar)
+target
+**/target
+*.pdb
+*.rlib
+*.rmeta
+
+# Geçici dosyalar
+*.tmp
+*.bak
+~$*
