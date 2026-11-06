@@ -1,0 +1,56 @@
+# Bir "v*" etiketi gönderilince Sqywein derlenir, test edilir ve GitHub
+# Releases'e yayınlanır. Tarayıcıdaki otomatik güncelleme buradan beslenir:
+# sqywein.exe + sqywein.exe.sha256 (indirilen dosya bu özetle doğrulanır).
+#
+# Yeni sürüm: Cargo.toml'daki sürümü artır, commit et, sonra
+#   git tag v0.3.0 && git push origin v0.3.0
+name: Sürüm yayınla
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Etiket ile Cargo sürümü aynı mı?
+        shell: pwsh
+        run: |
+          $cargo = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          if ("v$cargo" -ne "${{ github.ref_name }}") { throw "Etiket ${{ github.ref_name }}, Cargo.toml ise $cargo" }
+
+      - name: Rust
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ hashFiles('Cargo.lock') }}
+
+      - name: Test
+        run: cargo test --release
+
+      - name: Derle
+        run: cargo build --release
+
+      - name: Paketle
+        shell: pwsh
+        run: |
+          Copy-Item target/release/sqywein.exe sqywein.exe
+          $hash = (Get-FileHash sqywein.exe -Algorithm SHA256).Hash.ToLower()
+          Set-Content -NoNewline -Encoding ascii -Path sqywein.exe.sha256 -Value "$hash  sqywein.exe"
+
+      - name: Yayınla
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: gh release create "${{ github.ref_name }}" sqywein.exe sqywein.exe.sha256 --title "Sqywein ${{ github.ref_name }}" --generate-notes

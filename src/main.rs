@@ -17,6 +17,7 @@ mod passwords;
 mod state;
 mod theme;
 mod ui;
+mod update;
 mod url;
 
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
@@ -26,6 +27,9 @@ fn main() {
         // WebView2 tek iş parçacıklı daire (STA) ister.
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
     }
+    // Güncellemeden sonra açıldıysak önceki sürümün kapanmasını bekle.
+    app::wait_for_previous();
+    update::cleanup();
     if let Err(e) = app::run() {
         let text = windows::core::HSTRING::from(format!("Sqywein başlatılamadı:\n{e}"));
         unsafe {

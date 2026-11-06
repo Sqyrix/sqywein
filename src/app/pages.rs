@@ -125,6 +125,14 @@ impl App {
             }
             // Ayarlar
             "settings.get" => Some(self.settings_json()),
+            "update.check" => {
+                self.check_updates();
+                None
+            }
+            "update.apply" => {
+                self.apply_update();
+                None
+            }
             "adblock.update" => {
                 self.update_adblock_lists();
                 None
@@ -209,6 +217,7 @@ impl App {
             "profiles": self.profiles_json(),
             "about": { "version": env!("CARGO_PKG_VERSION"), "engine": format!("WebView2 {engine}") },
             "adblock": { "updated": crate::adblock::updated_label() },
+            "update": self.update_json(),
         })
     }
 
@@ -223,6 +232,7 @@ impl App {
             "sleepTabs" => st.sleep_tabs = b,
             "hardwareAcceleration" => st.hardware_acceleration = b, // Yeniden başlatınca geçerli.
             "searchSuggestions" => st.search_suggestions = b,
+            "autoUpdate" => st.auto_update = b,
             "accent" => {
                 st.accent = text;
                 set_accent(&st.accent);

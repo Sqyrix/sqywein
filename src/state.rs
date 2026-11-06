@@ -48,6 +48,8 @@ pub struct Settings {
     pub adblock_level: u8,
     /// Vurgu rengi: purple, blue, green, orange, pink, teal.
     pub accent: String,
+    /// GitHub'dan otomatik güncelleme.
+    pub auto_update: bool,
 }
 
 impl Default for Settings {
@@ -68,6 +70,7 @@ impl Default for Settings {
             adblock: true,
             adblock_level: 2,
             accent: "purple".into(),
+            auto_update: true,
         }
     }
 }
@@ -156,6 +159,9 @@ pub struct AppState {
     /// Pencerenin son konumu: [sol, üst, sağ, alt, ekranı kaplıyor mu].
     #[serde(default)]
     pub window: Option<[i32; 5]>,
+    /// Son güncelleme denetimi (Unix saniyesi).
+    #[serde(default)]
+    pub update_checked: u64,
     #[serde(default)]
     pub download_list: Vec<DownloadRecord>,
     /// Bizim kurduğumuz uzantıların klasörleri: uzantı kimliği → klasör.

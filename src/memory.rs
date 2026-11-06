@@ -47,3 +47,16 @@ pub fn total(pids: impl IntoIterator<Item = u32>) -> u64 {
 pub fn format_mb(bytes: u64) -> String {
     format!("{} MB", (bytes + 512 * 1024) / (1024 * 1024))
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn kendi_bellegi() {
+        let pid = std::process::id();
+        let mb = super::private_bytes(pid) / (1024 * 1024);
+        let v: Vec<u8> = vec![1; 64 * 1024 * 1024];
+        let after = super::private_bytes(pid) / (1024 * 1024);
+        println!("önce {mb} MB, 64 MB ayırınca {after} MB ({})", v.len());
+        assert!(after >= mb + 50, "özel bellek okunamıyor");
+    }
+}

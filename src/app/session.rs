@@ -103,6 +103,8 @@ impl App {
         if let Some(c) = self.account_view.take() {
             unsafe { let _ = c.Close(); }
         }
+        // Güncelleme kurulduysa yeni sürüm şimdi açılır (eskisi kapanınca devam eder).
+        self.launch_restart();
         let hwnd = self.hwnd;
         defer(move || unsafe { let _ = DestroyWindow(hwnd); });
     }

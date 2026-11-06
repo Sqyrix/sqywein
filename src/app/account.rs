@@ -130,6 +130,7 @@ impl App {
             Background::Suggestions(generation, list) => self.on_suggestions(generation, list),
             Background::Adblock(engines, fresh) => self.on_adblock_engine(engines, fresh),
             Background::Hello(request, outcome) => self.on_hello(request, outcome),
+            Background::Update(outcome) => self.on_update(outcome),
         }
     }
 

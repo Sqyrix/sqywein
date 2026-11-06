@@ -1,6 +1,6 @@
 [package]
 name = "sqywein"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Sqywein: hafif ve kendine has bir tarayıcı"
 build = "build.rs"
@@ -14,6 +14,7 @@ windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Graphics_
 zip = { version = "9.4.1", default-features = false, features = ["deflate"] }
 adblock = { version = "0.13.5", default-features = false, features = ["embedded-domain-resolver", "full-regex-handling"] }
 windows-future = "0.3.2"
+sha2 = "0.11.1"
 
 [build-dependencies]
 embed-resource = "3"

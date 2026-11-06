@@ -11,7 +11,10 @@ mod session;
 mod shield;
 mod suggest;
 mod tabs;
+mod updates;
 mod vault;
+
+pub use updates::wait_for_previous;
 
 use crate::{
     engine::{self, Event, ExtensionInfo, WM_ENGINE},
@@ -203,6 +206,7 @@ enum Hit {
     Forward,
     Reload,
     Star,
+    Update,
     Shield,
     ZoomPill,
     AddExtension,
@@ -236,6 +240,7 @@ struct Layout {
     zoom_pill: Option<Rect>,
     add_ext: Option<Rect>,
     downloads: Option<Rect>,
+    update: Option<Rect>,
     pinned: Vec<Rect>,
     puzzle: Rect,
     profile: Rect,
@@ -344,6 +349,11 @@ pub struct App {
     lingering: Vec<(u32, ICoreWebView2Controller)>,
     ram_line: String,
     asleep_count: usize,
+    // Güncelleme
+    update_ready: Option<(String, std::path::PathBuf)>,
+    update_status: String,
+    update_busy: bool,
+    restart_with: Option<std::path::PathBuf>,
     mascot: Option<Rc<Image>>,
     sleeping_mascot: Option<Rc<Image>>,
 }
@@ -475,10 +485,18 @@ pub fn run() -> Result<()> {
 
         // Çerçeve hesabı uygulama hazır olduktan sonra yeniden yapılsın.
         let _ = SetWindowPos(hwnd, None, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-        // Pencere son bırakıldığı yerde ve boyutta açılır.
-        if with_app(|app| app.restore_placement()) != Some(true) {
-            let _ = ShowWindow(hwnd, SW_SHOWDEFAULT);
+        // Pencere son bırakıldığı yerde ve boyutta açılır. Bu, uygulama meşgul değilken
+        // yapılır; yoksa boyut mesajı kaçar ve arayüz eski boyutta gerilmiş çizilir.
+        match with_app(|app| app.saved_placement()).flatten() {
+            Some(placement) => {
+                let _ = SetWindowPlacement(hwnd, &placement);
+            }
+            None => {
+                let _ = ShowWindow(hwnd, SW_SHOWDEFAULT);
+            }
         }
+        // Her ihtimale karşı boyut, pencerenin gerçek boyutuyla eşitlenir.
+        with_app(|app| app.sync_size());
         with_app(|app| {
             app.create_tooltip();
             app.start();
@@ -738,6 +756,10 @@ impl App {
             lingering: Vec::new(),
             ram_line: String::new(),
             asleep_count: 0,
+            update_ready: None,
+            update_status: String::new(),
+            update_busy: false,
+            restart_with: None,
             sleeping_mascot: crate::image::from_bytes(include_bytes!("../Assets/mascot-sleeping.png"), 250).map(Rc::new),
             mascot: crate::image::from_bytes(include_bytes!("../Assets/mascot-question.png"), 260).map(Rc::new),
         };
@@ -795,7 +817,7 @@ impl App {
         unsafe { SetTimer(Some(self.hwnd), TIMER_HOUSEKEEPING, 5000, None) };
         self.load_avatar();
         self.start_adblock();
-        self.update_ram_line();
+        self.maybe_check_updates();
         self.dirty = false; // Açılışta değişen bir şey yok; gereksiz kayıt yapılmasın.
     }
 
@@ -848,19 +870,12 @@ impl App {
             WM_SIZE => {
                 self.width = (lparam.0 & 0xFFFF) as u32;
                 self.height = ((lparam.0 >> 16) & 0xFFFF) as u32;
-                let minimized = wparam.0 as u32 == SIZE_MINIMIZED;
-                if let Some(view) = self.active_view() {
-                    engine::set_low_memory(&view, minimized);
-                }
-                if !minimized {
-                    self.gfx.resize(self.width, self.height);
-                    self.layout_children();
-                }
-                self.close_menu();
-                self.close_popup();
-                self.close_suggest();
-                self.invalidate();
+                self.on_size(wparam.0 as u32 == SIZE_MINIMIZED);
                 Some(LRESULT(0))
+            }
+            WM_EXITSIZEMOVE => {
+                self.sync_size();
+                None
             }
             WM_MOVE => {
                 self.close_menu();
@@ -974,6 +989,9 @@ impl App {
                         }
                         self.rest_unused_tabs();
                         self.update_ram_line();
+                        if self.housekeeping_ticks % 720 == 0 {
+                            self.maybe_check_updates(); // Saatte bir bakar; 12 saat dolduysa denetler.
+                        }
                         if self.dirty {
                             self.save();
                         }
@@ -1012,6 +1030,35 @@ impl App {
             }
             _ => None,
         }
+    }
+
+    /// Pencerenin gerçek iç boyutunu okuyup çizim yüzeyini ve yerleşimi ona uydurur.
+    fn sync_size(&mut self) {
+        let mut rc = RECT::default();
+        if unsafe { GetClientRect(self.hwnd, &mut rc) }.is_err() {
+            return;
+        }
+        let (w, h) = ((rc.right - rc.left).max(0) as u32, (rc.bottom - rc.top).max(0) as u32);
+        let minimized = unsafe { IsIconic(self.hwnd) }.as_bool();
+        if (w, h) != (self.width, self.height) && !minimized {
+            self.width = w;
+            self.height = h;
+            self.on_size(false);
+        }
+    }
+
+    fn on_size(&mut self, minimized: bool) {
+        if let Some(view) = self.active_view() {
+            engine::set_low_memory(&view, minimized);
+        }
+        if !minimized {
+            self.gfx.resize(self.width, self.height);
+            self.layout_children();
+        }
+        self.close_menu();
+        self.close_popup();
+        self.close_suggest();
+        self.invalidate();
     }
 
     // ---------- Animasyon ----------
@@ -1112,6 +1159,10 @@ impl App {
             x -= 36.0;
             btn(x)
         });
+        let update = self.update_pill_width().map(|w| {
+            x -= w + 6.0;
+            Rect::new(x, ty + 4.0, w, 24.0)
+        });
         let address = Rect::new(reload.right() + 8.0, ty, (x - reload.right() - 16.0).max(60.0), 32.0);
 
         // Adres çubuğunun sağ ucu: yıldız, yakınlaştırma, "Sqywein'e ekle".
@@ -1166,6 +1217,7 @@ impl App {
             zoom_pill,
             add_ext,
             downloads,
+            update,
             pinned,
             puzzle,
             profile,
@@ -1289,7 +1341,7 @@ impl App {
                 return h;
             }
         }
-        for (r, h) in [(l.shield, Hit::Shield), (l.zoom_pill, Hit::ZoomPill), (l.add_ext, Hit::AddExtension), (l.downloads, Hit::Downloads)] {
+        for (r, h) in [(l.update, Hit::Update), (l.shield, Hit::Shield), (l.zoom_pill, Hit::ZoomPill), (l.add_ext, Hit::AddExtension), (l.downloads, Hit::Downloads)] {
             if r.is_some_and(|r| r.contains(x, y)) {
                 return h;
             }
@@ -1370,6 +1422,7 @@ impl App {
             }
             Hit::Star => self.run(Cmd::Bookmark),
             Hit::Shield => self.open_menu(MenuKind::Shield),
+            Hit::Update => self.apply_update(),
             Hit::ZoomPill => {
                 // Yakınlaştırmayı varsayılana döndürür.
                 let z = self.default_zoom();
@@ -2573,6 +2626,9 @@ impl App {
             g.text(text, r, Font::Small, fg, Align::Center);
         }
 
+        if let Some(r) = l.update {
+            self.paint_update_pill(r);
+        }
         // İndirmeler: etkin indirme varken ilerleme halkası.
         if let Some(r) = l.downloads {
             let open = self.menu.as_ref().is_some_and(|m| m.kind == MenuKind::Downloads);

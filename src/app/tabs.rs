@@ -204,6 +204,7 @@ impl App {
             Hit::NewTab => "Yeni sekme (Ctrl+T)".into(),
             Hit::Star => if self.is_bookmarked(&tab.url) { "Yer işaretini kaldır".into() } else { "Yer işaretlerine ekle (Ctrl+D)".into() },
             Hit::Shield => "Reklam engelleyici".into(),
+            Hit::Update => format!("Sqywein v{} hazır: yeniden başlatıp kurmak için tıkla", self.update_ready.as_ref()?.0),
             Hit::ZoomPill => "Yakınlaştırmayı sıfırla".into(),
             Hit::AddExtension => "Bu uzantıyı Sqywein'e ekle".into(),
             Hit::Downloads => "İndirmeler (Ctrl+J)".into(),
@@ -253,6 +254,7 @@ impl App {
             Hit::NewTab => l.new_tab,
             Hit::Star => l.star,
             Hit::Shield => l.shield?,
+            Hit::Update => l.update?,
             Hit::ZoomPill => l.zoom_pill?,
             Hit::AddExtension => l.add_ext?,
             Hit::Downloads => l.downloads?,
@@ -302,25 +304,23 @@ impl App {
 
     // ---------- Pencere konumu ----------
 
-    /// Kayıtlı pencere konumu ve boyutu; ekranlardan birinin üstündeyse uygulanır.
-    pub(super) fn restore_placement(&self) -> bool {
-        let Some([left, top, right, bottom, maximized]) = self.state.window else { return false };
+    /// Kayıtlı pencere konumu ve boyutu (ekranlardan birinin üstündeyse).
+    /// Uygulamanın dışında uygulanmalı: pencere boyut mesajları uygulamaya ulaşabilsin.
+    pub(super) fn saved_placement(&self) -> Option<WINDOWPLACEMENT> {
+        let [left, top, right, bottom, maximized] = self.state.window?;
         let rect = RECT { left, top, right, bottom };
         if right - left < 200 || bottom - top < 150 {
-            return false;
+            return None;
         }
-        unsafe {
-            if MonitorFromRect(&rect, MONITOR_DEFAULTTONULL).is_invalid() {
-                return false; // O ekran artık bağlı değil.
-            }
-            let placement = WINDOWPLACEMENT {
-                length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
-                showCmd: if maximized != 0 { SW_SHOWMAXIMIZED.0 as u32 } else { SW_SHOWNORMAL.0 as u32 },
-                rcNormalPosition: rect,
-                ..Default::default()
-            };
-            SetWindowPlacement(self.hwnd, &placement).is_ok()
+        if unsafe { MonitorFromRect(&rect, MONITOR_DEFAULTTONULL) }.is_invalid() {
+            return None; // O ekran artık bağlı değil.
         }
+        Some(WINDOWPLACEMENT {
+            length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+            showCmd: if maximized != 0 { SW_SHOWMAXIMIZED.0 as u32 } else { SW_SHOWNORMAL.0 as u32 },
+            rcNormalPosition: rect,
+            ..Default::default()
+        })
     }
 
     pub(super) fn remember_placement(&mut self) {

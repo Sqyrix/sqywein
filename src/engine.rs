@@ -86,6 +86,8 @@ pub enum Background {
     Suggestions(u64, Vec<String>),
     /// Reklam engelleyici motoru (diskten ya da yeni derlenmiş).
     Adblock(Option<Box<(crate::adblock::Engine, Option<crate::adblock::Engine>)>>, bool),
+    /// Güncelleme denetiminin sonucu.
+    Update(crate::update::Outcome),
     /// Windows Hello sonucu (istek kimliği, sonuç).
     Hello(u32, crate::hello::Outcome),
 }
