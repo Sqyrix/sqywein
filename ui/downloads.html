@@ -11,11 +11,18 @@ function downloadRow(item){
   const active=['progress','paused'].includes(item.status);
   const name=item.name || 'Adsız dosya';
   const title=item.status==='done' ? action(name,() => send('downloads.open',{id:item.id}),null,{class:'quiet title',title:item.path}) : el('div',{class:'title'},name);
+  if(item.status==='done'){
+    let holdTimer=0,held=false;
+    title.addEventListener('pointerdown',e=>{if(e.button!==0)return;held=false;holdTimer=setTimeout(()=>{held=true;send('downloads.preview',{id:item.id});},500);});
+    const cancel=()=>clearTimeout(holdTimer);for(const type of ['pointerup','pointerleave','pointercancel'])title.addEventListener(type,cancel);
+    title.addEventListener('click',e=>{if(held){e.preventDefault();e.stopImmediatePropagation();held=false;}},true);
+    title.title='Basılı tut: Hızlı Bakış · Tıkla: Dosyayı aç';
+  }
   const detail=el('div',{class:'detail'},el('span',{class:item.status==='failed'?'status-failed':''},labels[item.status] || 'Durum bilinmiyor'),` · ${bytes(item.received)}${item.total>0 ? ` / ${bytes(item.total)}` : active ? ' / Boyut bilinmiyor' : ''}`);
   const info=el('div',{class:'row-main'},title,detail,el('div',{class:'detail',title:item.path},host(item.url)));
   if(active){const known=item.total>0;const percentage=known?Math.min(100,Math.max(0,Math.round(item.received/item.total*100))):0;const progress=el('div',{class:`progress${!known && item.status==='progress'?' indeterminate':''}`,role:'progressbar','aria-label':`${name} indirme ilerlemesi`,'aria-valuemin':'0','aria-valuemax':'100',...(known ? {'aria-valuenow':percentage} : {'aria-valuetext':'Boyut bilinmiyor'})},el('span',{}));if(known)progress.firstChild.style.width=`${percentage}%`;info.append(progress);}
   const actions=el('div',{class:'actions'});
-  if(item.status==='done')actions.append(action('Dosyayı aç',() => send('downloads.open',{id:item.id}),'open'),action('Klasörde göster',() => send('downloads.show',{id:item.id}),'folder'));
+  if(item.status==='done')actions.append(action('Hızlı Bakış',()=>send('downloads.preview',{id:item.id})),action('Dosyayı aç',() => send('downloads.open',{id:item.id}),'open'),action('Klasörde göster',() => send('downloads.show',{id:item.id}),'folder'));
   if(active)actions.append(action(item.status==='paused'?'Sürdür':'Duraklat',() => send(item.status==='paused'?'downloads.resume':'downloads.pause',{id:item.id})),action('İptal et',() => send('downloads.cancel',{id:item.id}),'close'));
   else actions.append(action('Kaydı kaldır',() => send('downloads.remove',{id:item.id}),'delete'));
   return el('div',{class:'row',role:'listitem','data-id':item.id},(item.icon?el('img',{class:'file-icon',src:item.icon,alt:'','aria-hidden':'true'}):el('span',{class:'badge','aria-hidden':'true'},icon('download'))),info,actions);

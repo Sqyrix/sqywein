@@ -96,6 +96,8 @@ thread_local! {
     static PAGES: RefCell<HashMap<u32, String>> = RefCell::new(HashMap::new());
     /// Sekme kimliği → bu sayfada engellenen istek sayısı.
     static BLOCKED: RefCell<HashMap<u32, u32>> = RefCell::new(HashMap::new());
+    /// Gizlilik raporu için: son okumadan beri engellenenler.
+    static TOTAL: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     /// Site → kullanıcının seçtiği mod.
     static SITE_LEVELS: RefCell<HashMap<String, u8>> = RefCell::new(HashMap::new());
 }
@@ -150,6 +152,11 @@ pub fn forget(tab: u32) {
     BLOCKED.with(|b| b.borrow_mut().remove(&tab));
 }
 
+/// Son çağrıdan beri engellenen istek sayısı (sıfırlanır).
+pub fn take_total() -> u64 {
+    TOTAL.with(|t| t.replace(0))
+}
+
 pub fn blocked_count(tab: u32) -> u32 {
     BLOCKED.with(|b| b.borrow().get(&tab).copied().unwrap_or(0))
 }
@@ -190,6 +197,7 @@ pub fn should_block(tab: u32, url: &str, kind: &str) -> bool {
     let block = ENGINE.with(|e| check(e, &req)) || (level >= COMPLETE && ANNOY.with(|e| check(e, &req)));
     if block {
         BLOCKED.with(|b| *b.borrow_mut().entry(tab).or_insert(0) += 1);
+        TOTAL.with(|t| t.set(t.get() + 1));
         if crate::log::enabled() {
             crate::log::line(&format!("ENGEL #{tab} {kind} {url}"));
         }

@@ -14,6 +14,9 @@ mod tabs;
 mod updates;
 mod vault;
 mod integration_ui;
+mod translate;
+mod extras;
+mod overlay;
 
 pub use updates::wait_for_previous;
 
@@ -78,6 +81,8 @@ struct Tab {
     url: String,
     title: String,
     loading: bool,
+    /// Yüklemenin başladığı an (adres alanındaki ilerleme çizgisi için).
+    load_started: Option<Instant>,
     error: Option<String>,
     ctrl: Option<ICoreWebView2Controller>,
     view: Option<ICoreWebView2>,
@@ -107,6 +112,18 @@ struct Tab {
     ad_exceptions: Option<(bool, HashSet<String>)>,
     /// En az bir sayfa yüklendi mi? (Yalnızca indirme için açılan sekmeleri tanımak için.)
     has_loaded: bool,
+    /// Sayfa Türkçe değilse dili ("?" = bilinmiyor); çeviri düğmesi bunu gösterir.
+    page_lang: Option<String>,
+    /// Sayfa şu an çevrilmiş mi, kaç çeviri isteği yolda.
+    translated: bool,
+    tr_pending: u32,
+    tr_generation: u64,
+    tr_error: bool,
+    tr_collecting: bool,
+    tr_limited: bool,
+    /// Kullanıcı bu sayfada çeviriyi kapattı: aynı sayfada kendiliğinden yeniden çevrilmez.
+    tr_declined: bool,
+    tr_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     external_launch: Option<Instant>,
     /// Uygulanan yakınlaştırma ve hangi site için uygulandığı.
     zoom: f64,
@@ -126,6 +143,7 @@ impl Tab {
             url,
             title,
             loading: false,
+            load_started: None,
             error: None,
             ctrl: None,
             view: None,
@@ -133,6 +151,15 @@ impl Tab {
             mem: Mem::Asleep,
             last_active: Instant::now(),
             epoch: 0,
+            page_lang: None,
+            translated: false,
+            tr_pending: 0,
+            tr_generation: 0,
+            tr_error: false,
+            tr_collecting: false,
+            tr_limited: false,
+            tr_declined: false,
+            tr_cancel: None,
             view_epoch: 0,
             sleep_check: false,
             sleep_discard: false,
@@ -182,6 +209,7 @@ impl Tab {
     }
 
     fn close_view(&mut self) {
+        if let Some(cancel) = self.tr_cancel.take() { cancel.store(true, std::sync::atomic::Ordering::Relaxed); }
         self.window_request = None;
         self.epoch += 1;
         self.view_epoch += 1;
@@ -247,6 +275,8 @@ enum Hit {
     Forward,
     Reload,
     Address,
+    Translate,
+    Share,
     Star,
     Update,
     Shield,
@@ -263,6 +293,10 @@ enum Hit {
     Tile(usize),
     TileRemove(usize),
     TileAdd,
+    Home,
+    Weather,
+    /// Gizli ↔ normal sekmeler arasında geçiş.
+    Mode,
 }
 
 struct Layout {
@@ -273,18 +307,23 @@ struct Layout {
     close: Rect,
     back: Rect,
     forward: Rect,
+    home: Rect,
     reload: Rect,
     address: Rect,
     /// Adres çubuğunda yazının sığacağı alan.
     address_text: Rect,
     star: Rect,
+    translate: Option<Rect>,
     shield: Option<Rect>,
     zoom_pill: Option<Rect>,
     add_ext: Option<Rect>,
     downloads: Option<Rect>,
     update: Option<Rect>,
     pinned: Vec<Rect>,
+    /// Gizli/normal geçiş düğmesi (gizli sekme varken).
+    mode: Option<Rect>,
     puzzle: Rect,
+    share: Rect,
     profile: Rect,
     menu: Rect,
     content: Rect,
@@ -305,6 +344,8 @@ struct Popup {
     hwnd: HWND,
     ctrl: Option<ICoreWebView2Controller>,
     url: String,
+    gfx: Option<Gfx>,
+    glass: bool,
 }
 
 type FileIconCache = RefCell<crate::cache::Cache<String, Option<(Rc<Image>, String)>>>;
@@ -337,6 +378,11 @@ pub struct App {
     animation_interval: u32,
     pressed: Hit,
     tracking_mouse: bool,
+    /// Odak modu: araç çubuğu gizli; fare üste gelince (`focus_reveal`) görünür.
+    focus_mode: bool,
+    focus_reveal: bool,
+    /// Windows paylaşım penceresine bağlı olay.
+    share_token: Option<i64>,
     state: state::AppState,
     history: History,
     dirty: bool,
@@ -364,6 +410,12 @@ pub struct App {
     /// Kurulmakta olan uzantı: (mağaza kimliği ya da "", klasör).
     pending_install: Option<(String, std::path::PathBuf)>,
     popup: Option<Popup>,
+    surface: Option<overlay::Surface>,
+    overlay_generation: u64,
+    thumbnail_queue: std::collections::VecDeque<u32>,
+    thumbnail_inflight: Option<u32>,
+    preview_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    ocr_request: u64,
     auth_popups: HashMap<u32, Popup>,
     retired_auth: Vec<(Instant, Popup)>,
     // İndirmeler
@@ -403,6 +455,18 @@ pub struct App {
     context_tab: u32,
     menu_anchor: Option<POINT>,
     drag: Option<tabs::Drag>,
+    /// Bırakılan sekme: yerine hızlıca oturana kadar.
+    drop_snap: Option<u32>,
+    /// Başlangıç sayfası kartlarının verisi ve son yenileme zamanı.
+    weather: Option<crate::widgets::WeatherState>,
+    rates: Option<crate::widgets::Rates>,
+    /// Yolda olan istekler ve başarısızlıktan sonra yeniden deneme zamanı (Unix sn).
+    /// Önizlemenin sekmeye büyüme animasyonu.
+    expand: Option<extensions::Expand>,
+    weather_busy: bool,
+    rates_busy: bool,
+    weather_retry: u64,
+    rates_retry: u64,
     tooltip: HWND,
     tooltip_text: HSTRING,
     /// İndirme → başlatan sekme; indirmesi süren kapalı sekmelerin görünümleri.
@@ -416,7 +480,6 @@ pub struct App {
     update_busy: bool,
     restart_with: Option<std::path::PathBuf>,
     mascot: Option<Rc<Image>>,
-    sleeping_mascot: Option<Rc<Image>>,
 }
 
 // ---------- Uygulama durumuna erişim ----------
@@ -521,7 +584,9 @@ pub fn run() -> Result<()> {
             WINDOW_EX_STYLE(0),
             class,
             w!("Sqywein"),
-            WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+            // WS_SYSMENU yok: cam açıkken Windows kendi küçült/büyüt/kapat düğmelerini
+            // çizmez; onları araç çubuğuyla aynı hizada biz çizeriz.
+            (WS_OVERLAPPEDWINDOW & !WS_SYSMENU) | WS_CLIPCHILDREN,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
             (1280.0 * scale) as i32,
@@ -642,14 +707,6 @@ fn edit_brushes() -> (HBRUSH, HBRUSH) {
 
 extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     unsafe {
-        // Cam açıkken küçült/büyüt/kapat düğmelerini Windows çizer (Ek Yerleşimler dahil);
-        // fare onların üzerindeyken mesajlar önce Windows'a gider.
-        if crate::theme::glass() {
-            let mut result = LRESULT(0);
-            if DwmDefWindowProc(hwnd, msg, wparam, lparam, &mut result).as_bool() {
-                return result;
-            }
-        }
         match msg {
             // Sistem çerçevesini kaldır: başlık çubuğunu biz çiziyoruz.
             WM_NCCALCSIZE if wparam.0 != 0 => {
@@ -818,6 +875,9 @@ impl App {
             animation_interval: 16,
             pressed: Hit::None,
             tracking_mouse: false,
+            focus_mode: false,
+            focus_reveal: false,
+            share_token: None,
             history: History::load_profile(&state.current_profile),
             state,
             dirty: false,
@@ -840,6 +900,12 @@ impl App {
             pending_update_enabled: None,
             pending_install: None,
             popup: None,
+            surface: None,
+            overlay_generation: 0,
+            thumbnail_queue: std::collections::VecDeque::new(),
+            thumbnail_inflight: None,
+            preview_cancel: None,
+            ocr_request: 0,
             auth_popups: HashMap::new(),
             retired_auth: Vec::new(),
             downloads: Vec::new(),
@@ -871,6 +937,14 @@ impl App {
             context_tab: 0,
             menu_anchor: None,
             drag: None,
+            drop_snap: None,
+            weather: None,
+            rates: None,
+            expand: None,
+            weather_busy: false,
+            rates_busy: false,
+            weather_retry: 0,
+            rates_retry: 0,
             tooltip: HWND::default(),
             tooltip_text: HSTRING::new(),
             download_owner: HashMap::new(),
@@ -881,7 +955,6 @@ impl App {
             update_status: String::new(),
             update_busy: false,
             restart_with: None,
-            sleeping_mascot: crate::image::from_bytes(include_bytes!("../Assets/mascot-sleeping.png"), 250).map(Rc::new),
             mascot: crate::image::from_bytes(include_bytes!("../Assets/mascot-question.png"), 260).map(Rc::new),
         };
         app.vault = crate::passwords::Vault::load(&app.state.current_profile);
@@ -902,6 +975,8 @@ impl App {
 
     fn start(&mut self) {
         self.update_glass();
+        // Başlangıç sayfası kartları açılışta hazırlanır: kayıtlı veri hemen, yenisi arkada.
+        self.refresh_widgets();
         let saved = std::mem::take(&mut self.state.tabs);
         if self.state.settings.startup != "newtab" {
             for t in &saved {
@@ -982,7 +1057,7 @@ impl App {
     }
 
     fn on_start_page(&self) -> bool {
-        self.full_screen.is_none() && self.tabs.get(self.active).is_some_and(|t| t.url.is_empty())
+        !self.chrome_hidden() && self.tabs.get(self.active).is_some_and(|t| t.url.is_empty())
     }
 
     fn active_view(&self) -> Option<ICoreWebView2> {
@@ -1064,6 +1139,9 @@ impl App {
                     self.drag_move(x);
                     return Some(LRESULT(0));
                 }
+                if self.focus_mode && !self.focus_reveal && self.point(lparam).1 <= FOCUS_STRIP + 1.0 {
+                    self.set_focus_reveal(true);
+                }
                 let hit = self.hit(lparam);
                 if !self.tracking_mouse {
                     let mut tme = TRACKMOUSEEVENT {
@@ -1099,6 +1177,9 @@ impl App {
             }
             WM_MOUSELEAVE => {
                 self.tracking_mouse = false;
+                if self.focus_reveal && self.menu.is_none() && self.suggest.is_none() && self.popup.is_none() && unsafe { GetFocus() } != self.edit {
+                    self.set_focus_reveal(false);
+                }
                 self.previous_hover = self.hover;
                 self.hover = Hit::None;
                 self.hover_progress = 0.0;
@@ -1151,7 +1232,12 @@ impl App {
             WM_TIMER => {
                 match wparam.0 {
                     suggest::TIMER_SUGGEST => self.fetch_suggestions(),
+                    overlay::TIMER_THUMBNAIL => self.thumbnail_timeout(),
+                    translate::TIMER_TRANSLATE => self.translate_tick(),
+                    extensions::TIMER_EXPAND => self.expand_tick(),
                     TIMER_HOUSEKEEPING => {
+                        self.fold_privacy_stats();
+                        if self.on_start_page() { self.refresh_widgets(); }
                         // Oturum çerezleri 30 saniyede bir şifreli olarak saklanır.
                         self.housekeeping_ticks = self.housekeeping_ticks.wrapping_add(1);
                         let previous = self.memory_pressure;
@@ -1253,23 +1339,131 @@ impl App {
     /// Animasyon zamanlayıcısını gerekiyorsa başlatır (~60 kare/sn).
     fn animate(&mut self) {
         if unsafe { IsIconic(self.hwnd) }.as_bool() {
-            self.anim_running = false; unsafe { let _ = KillTimer(Some(self.hwnd), TIMER_ANIM); } return;
+            self.stop_animation(); return;
         }
         if !motion_enabled() {
             let targets = self.layout().tabs;
             for (t, r) in self.tabs.iter_mut().zip(targets.iter()) { t.x = r.x; t.w = r.w; }
             if let Some(r) = self.layout().tabs.get(self.active) { self.selection_x = r.x; self.selection_w = r.w; }
             self.ghosts.clear(); self.hover_progress = 1.0;
-            self.anim_running = false;
-            unsafe { let _ = KillTimer(Some(self.hwnd), TIMER_ANIM); }
+            self.stop_animation();
             self.invalidate(); return;
         }
         if !self.anim_running {
             self.anim_running = true;
-            self.animation_interval = 16;
+            self.animation_interval = 10;
             self.last_tick = Instant::now();
-            unsafe { SetTimer(Some(self.hwnd), TIMER_ANIM, 16, None) };
+            // Windows zamanlayıcısı varsayılan olarak 15,6 ms adımlıdır; animasyon
+            // sürerken 1 ms'ye inilir ki kareler eşit aralıkla gelsin (takılma olmasın).
+            unsafe { let _ = windows::Win32::Media::timeBeginPeriod(1); }
+            unsafe { SetTimer(Some(self.hwnd), TIMER_ANIM, 10, None) };
         }
+    }
+
+    /// Ana sayfa düğmesi: bu sekmede başlangıç sayfasını gösterir.
+    fn go_home(&mut self) {
+        let i = self.active;
+        let tab = &mut self.tabs[i];
+        tab.url.clear();
+        tab.title.clear();
+        tab.error = None;
+        tab.loading = false;
+        self.show_active();
+        self.animate();
+    }
+
+    /// Başlangıç sayfası kartları: kayıtlı veri hemen görünür; hava durumu yarım
+    /// saatte, kurlar üç saatte bir arkada yenilenir. İkisi aynı anda istenir.
+    fn refresh_widgets(&mut self) {
+        if !self.state.settings.show_widgets || self.tabs.get(self.active).is_some_and(|t| t.private) {
+            return;
+        }
+        use crate::widgets::{now, WeatherState};
+        let t = now();
+        if self.weather.is_none() {
+            if let Some((_, w)) = &self.state.widgets.weather { self.weather = Some(WeatherState::Ready(w.clone())); }
+        }
+        if self.rates.is_none() {
+            if let Some((_, r)) = &self.state.widgets.rates { self.rates = Some(r.clone()); }
+        }
+        let stale = |at: Option<u64>, limit: u64| at.is_none_or(|at| t.saturating_sub(at) >= limit);
+        if !self.weather_busy && t >= self.weather_retry && stale(self.state.widgets.weather.as_ref().map(|w| w.0), 30 * 60) {
+            self.weather_busy = true;
+            crate::widgets::refresh_weather(self.state.settings.weather_city.clone(), self.state.widgets.location.clone());
+        }
+        if !self.rates_busy && t >= self.rates_retry && stale(self.state.widgets.rates.as_ref().map(|r| r.0), 3 * 3600) {
+            self.rates_busy = true;
+            crate::widgets::refresh_rates();
+        }
+    }
+
+    fn on_weather(&mut self, weather: crate::widgets::WeatherState, location: Option<crate::widgets::Location>) {
+        use crate::widgets::{now, WeatherState};
+        self.weather_busy = false;
+        match &weather {
+            WeatherState::Ready(w) => {
+                self.state.widgets.weather = Some((now(), w.clone()));
+                self.state.widgets.location = location;
+                self.dirty = true;
+                self.weather = Some(weather);
+            }
+            // Kayıtlı veri varken geçici bir hata onu silmez; beş dakika sonra yeniden denenir.
+            WeatherState::Failed => {
+                self.weather_retry = now() + 300;
+                if self.weather.is_none() { self.weather = Some(weather); }
+            }
+            WeatherState::NoLocation => {
+                self.weather_retry = now() + 300;
+                if self.state.widgets.weather.is_none() { self.weather = Some(weather); }
+            }
+        }
+        if self.on_start_page() { self.invalidate(); }
+    }
+
+    fn on_rates(&mut self, rates: Option<crate::widgets::Rates>) {
+        use crate::widgets::now;
+        self.rates_busy = false;
+        match rates {
+            Some(r) => { self.state.widgets.rates = Some((now(), r.clone())); self.rates = Some(r); self.dirty = true; }
+            None => self.rates_retry = now() + 300,
+        }
+        if self.on_start_page() { self.invalidate(); }
+    }
+
+    /// Gizli ↔ normal: öbür moddaki en son kullanılan sekmeye geçer; yoksa o modda yeni sekme açar.
+    fn switch_mode(&mut self) {
+        let private = !self.tabs[self.active].private;
+        let target = self.tabs.iter().enumerate().filter(|(_, t)| t.private == private).max_by_key(|(_, t)| t.last_active).map(|(i, _)| i);
+        match target {
+            Some(i) => self.activate(i),
+            None if private => self.new_private_tab(),
+            None => self.new_tab(String::new(), None),
+        }
+        self.layout_children();
+        self.animate();
+        self.invalidate();
+    }
+
+    /// Ctrl+Tab: aynı moddaki (gizli ya da normal) bir sonraki sekme.
+    fn cycle_tab(&self, step: usize) -> usize {
+        let n = self.tabs.len();
+        let private = self.tabs[self.active].private;
+        let mut i = self.active;
+        for _ in 0..n {
+            i = (i + step) % n;
+            if self.tabs[i].private == private {
+                return i;
+            }
+        }
+        self.active
+    }
+
+    fn stop_animation(&mut self) {
+        if self.anim_running {
+            unsafe { let _ = windows::Win32::Media::timeEndPeriod(1); }
+        }
+        self.anim_running = false;
+        unsafe { let _ = KillTimer(Some(self.hwnd), TIMER_ANIM); }
     }
 
     fn interaction_moving(&self) -> bool {
@@ -1295,28 +1489,40 @@ impl App {
         let now = Instant::now();
         let dt = now.duration_since(self.last_tick).as_secs_f32().min(0.05);
         self.last_tick = now;
-        let k = 1.0 - (-dt * 24.0).exp();
+        let k = 1.0 - (-dt * 18.0).exp();
         self.hover_progress += (1.0 - self.hover_progress) * (1.0 - (-dt * 32.0).exp());
         if self.hover_progress > 0.995 { self.hover_progress = 1.0; }
         let targets = self.layout().tabs;
         let dragged = self.dragging_id();
+        // Sürüklerken yer açan sekmeler ve bırakılan sekme hızlı ve net oturur.
+        let snap = 1.0 - (-dt * 34.0).exp();
+        let drop = self.drop_snap;
         for (t, r) in self.tabs.iter_mut().zip(&targets) {
             if Some(t.id) != dragged {
-                t.x = lerp_toward(t.x, r.x, k);
+                let kk = if dragged.is_some() || Some(t.id) == drop { snap } else { k };
+                t.x = lerp_toward(t.x, r.x, kk);
             }
             t.w = lerp_toward(t.w, r.w, k);
         }
-        if let Some(r) = targets.get(self.active) {
-            self.selection_x = lerp_toward(self.selection_x, r.x, k);
-            self.selection_w = lerp_toward(self.selection_w, r.w, k);
+        if let (Some(r), Some(tab)) = (targets.get(self.active), self.tabs.get(self.active)) {
+            if Some(tab.id) == dragged || Some(tab.id) == drop {
+                // Etkin sekme taşınıyor: kart yazıyla birlikte, aynı karede hareket eder.
+                self.selection_x = tab.x;
+                self.selection_w = tab.w;
+            } else {
+                self.selection_x = lerp_toward(self.selection_x, r.x, k);
+                self.selection_w = lerp_toward(self.selection_w, r.w, k);
+            }
         }
-        let interval = if self.interaction_moving() { 16 } else { 33 };
+        if let Some(id) = drop {
+            if self.index_of(id).is_none_or(|i| self.tabs[i].x == targets[i].x) { self.drop_snap = None; }
+        }
+        let interval = if self.interaction_moving() { 10 } else { 16 };
         if interval != self.animation_interval { self.animation_interval = interval; unsafe { SetTimer(Some(self.hwnd), TIMER_ANIM, interval, None); } }
         self.ghosts.retain(|g| g.progress() < 1.0);
         self.invalidate();
         if !self.needs_animation() {
-            self.anim_running = false;
-            unsafe { let _ = KillTimer(Some(self.hwnd), TIMER_ANIM); }
+            self.stop_animation();
         }
     }
 
@@ -1350,13 +1556,15 @@ impl App {
         let btn = |x: f32| Rect::new(x, cy - 16.0, 32.0, 32.0);
         let back = btn(12.0);
         let forward = btn(back.right() + 2.0);
+        let home = btn(forward.right() + 2.0);
 
         // Sağdan sola: menü, yeni sekme, yapboz, sabitlenen uzantılar, indirmeler.
         // Profil düğmesi yok: Google oturumu arka planda kendiliğinden çalışır.
         let menu = btn(min.x - 40.0);
         let profile = Rect::new(0.0, 0.0, 0.0, 0.0);
         let new_tab = btn(menu.x - 36.0);
-        let puzzle = btn(new_tab.x - 36.0);
+        let share = btn(new_tab.x - 36.0);
+        let puzzle = btn(share.x - 36.0);
         let mut x = puzzle.x;
         let pinned: Vec<Rect> = self
             .pinned_extensions()
@@ -1376,19 +1584,24 @@ impl App {
         });
 
         // Adres alanı pencerenin tam ortasında; yer yoksa iki grup arasına sığar.
-        let (lo, hi) = (forward.right() + 16.0, x - 16.0);
+        let (lo, hi) = (home.right() + 16.0, x - 16.0);
         let room = (hi - lo).max(120.0);
         let aw = (w * 0.46).clamp(300.0, 720.0).min(room);
         let ax = (w / 2.0 - aw / 2.0).clamp(lo, (hi - aw).max(lo));
         let address = Rect::new(ax, cy - 17.0, aw, 34.0);
 
         // Adresin sağ ucu: yenile, yıldız, kalkan, yakınlaştırma, "Sqywein'e ekle".
-        let reload = Rect::new(address.right() - 32.0, cy - 14.0, 28.0, 28.0);
+        let reload = Rect::new(address.right() - 30.0, cy - 13.0, 26.0, 26.0);
         let star = Rect::new(reload.x - 28.0, cy - 13.0, 26.0, 26.0);
         let mut inner_right = star.x;
+        let translate = self.translate_visible().then(|| {
+            let r = Rect::new(inner_right - 28.0, cy - 13.0, 26.0, 26.0);
+            inner_right = r.x;
+            r
+        });
         let shield = self.shield_visible().then(|| {
             let w = self.shield_width();
-            let r = Rect::new(inner_right - w - 2.0, cy - 14.0, w, 28.0);
+            let r = Rect::new(inner_right - w - 2.0, cy - 13.0, w, 26.0);
             inner_right = r.x;
             r
         });
@@ -1406,11 +1619,25 @@ impl App {
         let address_text = Rect::new(text_x, address.y, (inner_right - text_x - 6.0).max(20.0), address.h);
 
         // Sekmeler: alttaki şeridi eşit genişlikte paylaşır.
+        // Gizli sekmedeyken şeritte yalnızca gizli sekmeler görünür (ayrı pencere gibi);
+        // öbürleri sol kenarda sıfır genişliğe kapanır.
         let left = 8.0;
         let avail = (w - 2.0 * left).max(0.0);
-        let n = self.tabs.len().max(1) as f32;
+        let private_mode = self.tabs.get(self.active).is_some_and(|t| t.private);
+        let n = self.tabs.iter().filter(|t| t.private == private_mode).count().max(1) as f32;
+        let mode = self.tabs.iter().any(|t| t.private).then(|| Rect::new(8.0, TOOL_ROW + 3.0, 34.0, TAB_ROW - 7.0));
+        let left = if mode.is_some() { left + 38.0 } else { left };
+        let avail = if mode.is_some() { (avail - 38.0).max(0.0) } else { avail };
         let tw = (avail / n).max(TAB_MIN.min(avail / n));
-        let tabs = (0..self.tabs.len()).map(|i| Rect::new(left + i as f32 * tw + 1.0, TOOL_ROW + 3.0, tw - 2.0, TAB_ROW - 7.0)).collect();
+        let mut slot = 0.0;
+        let tabs = self.tabs.iter().map(|t| {
+            if t.private != private_mode {
+                return Rect::new(left, TOOL_ROW + 3.0, 0.0, TAB_ROW - 7.0);
+            }
+            let r = Rect::new(left + slot * tw + 1.0, TOOL_ROW + 3.0, tw - 2.0, TAB_ROW - 7.0);
+            slot += 1.0;
+            r
+        }).collect();
 
         let (bar, bar_items, bar_more) = if self.bar_visible() {
             let (items, more) = self.bar_layout(CHROME, w);
@@ -1419,10 +1646,13 @@ impl App {
             (None, Vec::new(), None)
         };
         let top = CHROME + bar.map_or(0.0, |b| b.h);
-        let default_banner = (self.default_prompt.is_some() && self.full_screen.is_none()).then(|| Rect::new(GUTTER, top, (w - 2.0*GUTTER).max(0.0), if w < 760.0 { 86.0 } else { 48.0 }));
+        let default_banner = (self.default_prompt.is_some() && !self.chrome_hidden()).then(|| Rect::new(GUTTER, top, (w - 2.0*GUTTER).max(0.0), if w < 760.0 { 86.0 } else { 48.0 }));
         let top = top + default_banner.map_or(0.0, |r| r.h);
         let content = if self.full_screen.is_some() {
             Rect::new(0.0, 0.0, w, h)
+        } else if self.chrome_hidden() {
+            // Odak modu: üstte fareyi yakalayan ince bir şerit kalır.
+            Rect::new(0.0, FOCUS_STRIP, w, (h - FOCUS_STRIP).max(0.0))
         } else {
             Rect::new(GUTTER, top, (w - 2.0 * GUTTER).max(0.0), (h - top - GUTTER).max(0.0))
         };
@@ -1436,17 +1666,21 @@ impl App {
             close,
             back,
             forward,
+            home,
             reload,
             address,
             address_text,
             star,
+            translate,
             shield,
             zoom_pill,
             add_ext,
             downloads,
             update,
             pinned,
+            mode,
             puzzle,
+            share,
             profile,
             menu,
             content,
@@ -1488,7 +1722,7 @@ impl App {
     fn layout_children(&self) {
         let l = self.layout();
         self.place_default_prompt(&l);
-        let chrome = self.full_screen.is_none();
+        let chrome = !self.chrome_hidden();
         // Safari gibi: yazarken metin kutusu, yazmıyorken ortada alan adı.
         let editing = unsafe { GetFocus() } == self.edit || self.tabs.get(self.active).is_none_or(|t| t.url.is_empty());
         self.place_edit(self.edit, l.address_text, 13.5, chrome && editing);
@@ -1551,23 +1785,21 @@ impl App {
     }
 
     fn hit_at(&self, x: f32, y: f32) -> Hit {
-        if self.full_screen.is_some() {
+        if self.chrome_hidden() {
             return Hit::None;
         }
         let l = self.layout();
-        if !crate::theme::glass() {
-            for (r, h) in [(l.close, Hit::Close), (l.max, Hit::Max), (l.min, Hit::Min)] {
-                if r.contains(x, y) {
-                    return h;
-                }
+        for (r, h) in [(l.close, Hit::Close), (l.max, Hit::Max), (l.min, Hit::Min)] {
+            if r.contains(x, y) {
+                return h;
             }
-        } else if y < CAPTION_H && x >= l.min.x {
-            return Hit::None;
         }
         for (r, h) in [
             (l.new_tab, Hit::NewTab),
+            (l.share, Hit::Share),
             (l.back, Hit::Back),
             (l.forward, Hit::Forward),
+            (l.home, Hit::Home),
             (l.reload, Hit::Reload),
             (l.star, Hit::Star),
             (l.puzzle, Hit::Puzzle),
@@ -1578,7 +1810,7 @@ impl App {
                 return h;
             }
         }
-        for (r, h) in [(l.update, Hit::Update), (l.shield, Hit::Shield), (l.zoom_pill, Hit::ZoomPill), (l.add_ext, Hit::AddExtension), (l.downloads, Hit::Downloads)] {
+        for (r, h) in [(l.mode, Hit::Mode), (l.translate, Hit::Translate), (l.update, Hit::Update), (l.shield, Hit::Shield), (l.zoom_pill, Hit::ZoomPill), (l.add_ext, Hit::AddExtension), (l.downloads, Hit::Downloads)] {
             if r.is_some_and(|r| r.contains(x, y)) {
                 return h;
             }
@@ -1633,7 +1865,7 @@ impl App {
                 _ => {}
             }
         }
-        if self.full_screen.is_none() && y < CHROME && self.hit_at(x, y) == Hit::None {
+        if !self.chrome_hidden() && y < CHROME && self.hit_at(x, y) == Hit::None {
             return HTCAPTION;
         }
         HTCLIENT
@@ -1643,7 +1875,7 @@ impl App {
         let hwnd = self.hwnd;
         match hit {
             Hit::TabClose(i) => self.close_tab(i),
-            Hit::NewTab => self.new_tab(String::new(), None),
+            Hit::NewTab => self.run(Cmd::NewTab),
             Hit::Min => defer(move || unsafe { let _ = ShowWindow(hwnd, SW_MINIMIZE); }),
             Hit::Max => defer(move || unsafe {
                 let _ = ShowWindow(hwnd, if IsZoomed(hwnd).as_bool() { SW_RESTORE } else { SW_MAXIMIZE });
@@ -1662,6 +1894,8 @@ impl App {
             }
             Hit::Star => self.run(Cmd::Bookmark),
             Hit::Address => self.focus_address(),
+            Hit::Translate => self.open_translate(),
+            Hit::Share => self.open_menu(MenuKind::Share),
             Hit::Shield => self.open_menu(MenuKind::Shield),
             Hit::Update => self.apply_update(),
             Hit::ZoomPill => {
@@ -1691,6 +1925,9 @@ impl App {
             Hit::Tile(i) => self.open_shortcut(i, keys::modifiers().ctrl),
             Hit::TileRemove(i) => self.remove_shortcut(i),
             Hit::TileAdd => self.open_dialog(),
+            Hit::Home => self.go_home(),
+            Hit::Weather => self.new_tab(format!("{}#startup", url::internal("settings")), None),
+            Hit::Mode => self.switch_mode(),
             Hit::Tab(_) | Hit::None => {}
         }
     }
@@ -1701,6 +1938,8 @@ impl App {
         self.close_menu();
         let view = self.active_view();
         match cmd {
+            // Gizli moddayken yeni sekme de gizli açılır.
+            Cmd::NewTab if self.tabs.get(self.active).is_some_and(|t| t.private) => self.new_private_tab(),
             Cmd::NewTab => self.new_tab(String::new(), None),
             Cmd::PrivateTab => self.new_private_tab(),
             Cmd::CloseTab => self.close_tab(self.active),
@@ -1710,8 +1949,13 @@ impl App {
                 }
             }
             Cmd::FocusAddress => self.focus_address(),
-            Cmd::NextTab => self.activate((self.active + 1) % self.tabs.len()),
-            Cmd::PrevTab => self.activate((self.active + self.tabs.len() - 1) % self.tabs.len()),
+            Cmd::Translate => self.toggle_translate(),
+            Cmd::Spotlight => self.open_surface(overlay::Surface::Spotlight),
+            Cmd::Overview => self.open_surface(overlay::Surface::Tabs),
+            Cmd::Focus => self.toggle_focus_mode(),
+            Cmd::SwitchMode => self.switch_mode(),
+            Cmd::NextTab => self.activate(self.cycle_tab(1)),
+            Cmd::PrevTab => self.activate(self.cycle_tab(self.tabs.len() - 1)),
             Cmd::GoToTab(i) => {
                 if i < self.tabs.len() {
                     self.activate(i);
@@ -1875,6 +2119,13 @@ impl App {
             Item::Zoom,
             page("Yazdır…", "Ctrl+P", MenuCmd::Print),
             page("Sayfada bul…", "Ctrl+F", MenuCmd::Find),
+            page("Paylaş…", "", MenuCmd::OpenShare),
+            page("Görüntü içinde görüntü", "", MenuCmd::PictureInPicture),
+            Item::act(if self.tabs[self.active].private { "Normal sekmelere dön" } else { "Gizli sekmelere geç" }, "Ctrl+Shift+P", MenuCmd::SwitchMode),
+            Item::act(if self.focus_mode { "Odak modundan çık" } else { "Odak modu" }, "Ctrl+Shift+F", MenuCmd::FocusMode),
+            Item::act("Hızlı erişim", "Ctrl+Space", MenuCmd::Spotlight),
+            Item::act("Sekmelere genel bakış", "Ctrl+Shift+A", MenuCmd::Overview),
+            page(if self.tabs[self.active].translated { "Orijinal dili göster" } else { "Sayfayı çevir" }, "Ctrl+Shift+Y", MenuCmd::Translate),
             page("Geliştirici araçları", "F12", MenuCmd::DevTools),
             page("Bu sitenin izinleri…", "", MenuCmd::SitePermissions),
             page("Başka tarayıcıda aç", "", MenuCmd::OpenCompatible(self.tabs[self.active].id)),
@@ -1911,6 +2162,8 @@ impl App {
             MenuKind::Shield => (l.shield.unwrap_or(l.star), self.shield_menu_items()),
             MenuKind::SavePassword => (l.star, self.save_password_items()),
             MenuKind::TabContext => (l.menu, self.tab_menu_items()),
+            MenuKind::Share => (l.share, self.share_menu_items()),
+            MenuKind::Translate => (l.translate.unwrap_or(l.star), self.translation_items(false)),
         };
         let pt = match self.menu_anchor.take() {
             Some(pt) => pt,
@@ -1967,8 +2220,19 @@ impl App {
                 unsafe { let _ = EndPaint(hwnd, &ps); }
                 Some(LRESULT(0))
             }
+            WM_LBUTTONDOWN if menu.begin_drag(lparam) => {
+                unsafe { SetCapture(hwnd); let _ = InvalidateRect(Some(hwnd), None, false); }
+                Some(LRESULT(0))
+            }
+            WM_LBUTTONDOWN => { menu.begin_hold(lparam); Some(LRESULT(0)) }
+            WM_MOUSEMOVE if menu.dragging() => {
+                menu.drag_to(lparam);
+                unsafe { let _ = InvalidateRect(Some(hwnd), None, false); }
+                Some(LRESULT(0))
+            }
             WM_MOUSEMOVE => {
                 let part = menu.hit(lparam);
+                menu.cancel_hold_if_moved(part);
                 if menu.set_hover(part) {
                     unsafe { let _ = InvalidateRect(Some(hwnd), None, false); }
                 }
@@ -1977,12 +2241,23 @@ impl App {
                 Some(LRESULT(0))
             }
             WM_MOUSELEAVE => {
+                menu.cancel_hold();
                 if menu.set_hover(None) {
                     unsafe { let _ = InvalidateRect(Some(hwnd), None, false); }
                 }
                 Some(LRESULT(0))
             }
+            WM_LBUTTONUP if menu.dragging() => {
+                unsafe { let _ = ReleaseCapture(); }
+                let level = menu.end_drag();
+                unsafe { let _ = InvalidateRect(Some(hwnd), None, false); }
+                if let Some(level) = level {
+                    self.menu_command(MenuCmd::SetAdblockLevel(level));
+                }
+                Some(LRESULT(0))
+            }
             WM_LBUTTONUP => {
+                menu.cancel_hold();
                 if let Some(cmd) = menu.hit(lparam).and_then(|p| menu.command(p)) {
                     self.menu_command(cmd);
                 }
@@ -1991,6 +2266,15 @@ impl App {
             WM_KEYDOWN if wparam.0 as u16 == VK_ESCAPE.0 => {
                 self.close_menu();
                 self.focus_content();
+                Some(LRESULT(0))
+            }
+            WM_MOUSEWHEEL => { menu.scroll_by(-((wparam.0 >> 16) as u16 as i16 as f32) / 120.0 * 102.0); Some(LRESULT(0)) }
+            WM_TIMER if wparam.0 == 2 => {
+                if let Some(cmd) = menu.hold_command() { self.menu_command(cmd); }
+                Some(LRESULT(0))
+            }
+            WM_KEYDOWN => {
+                if let Some(cmd) = menu.keyboard(wparam.0 as u32) { self.menu_command(cmd); }
                 Some(LRESULT(0))
             }
             WM_TIMER => {
@@ -2008,6 +2292,7 @@ impl App {
     fn menu_command(&mut self, cmd: MenuCmd) {
         let ctrl = self.tabs[self.active].ctrl.clone();
         let view = self.active_view();
+        if self.translation_command(cmd) { return; }
         match cmd {
             MenuCmd::ZoomIn | MenuCmd::ZoomOut => {
                 // Yakınlaştırırken menü açık kalır; oran olay gelince güncellenir.
@@ -2061,6 +2346,18 @@ impl App {
                 }
             }
             MenuCmd::Find => self.find_in_page(),
+            MenuCmd::Translate => self.toggle_translate(),
+            MenuCmd::TranslationOptions | MenuCmd::TranslationLanguagePage(_, _) | MenuCmd::TranslationLanguages(_) | MenuCmd::TranslationLanguage(_, _) | MenuCmd::TranslationAlways | MenuCmd::TranslationNever | MenuCmd::TranslationSite | MenuCmd::TranslationSettings | MenuCmd::TranslationOriginal | MenuCmd::TranslationClose => {},
+            MenuCmd::OpenShare => { let hwnd = self.hwnd; defer(move || { with_app(|app| app.open_menu(MenuKind::Share)); let _ = hwnd; }); }
+            MenuCmd::CopyLink => self.copy_link(),
+            MenuCmd::ShareWindows => { defer(|| { with_app(|app| app.share_windows()); }); }
+            MenuCmd::EmailLink => self.email_link(),
+            MenuCmd::FocusMode => self.toggle_focus_mode(),
+            MenuCmd::SwitchMode => self.switch_mode(),
+            MenuCmd::Spotlight => self.open_surface(overlay::Surface::Spotlight),
+            MenuCmd::Overview => self.open_surface(overlay::Surface::Tabs),
+            MenuCmd::PreviewDownload(id) => self.open_surface(overlay::Surface::Download(id)),
+            MenuCmd::PictureInPicture => self.picture_in_picture(),
             MenuCmd::SitePermissions => {
                 let origin = self.tabs[self.active].url.clone();
                 self.new_tab(format!("{}#permissions={}", url::internal("settings"), url::encode(&origin)), None);
@@ -2218,6 +2515,7 @@ impl App {
         self.tabs[i].last_active = Instant::now();
         self.dirty = true;
         self.show_active();
+        if !self.tabs[i].loading && !self.tabs[i].translated && self.tabs[i].page_lang.is_some() { self.detect_language(i); }
     }
 
     /// Başlangıç, hata ve web sayfasından hangisinin görüneceğine tek yerden karar verir.
@@ -2230,6 +2528,8 @@ impl App {
         self.invalidate();
 
         if url.is_empty() {
+            self.refresh_widgets();
+            self.auto_favorites();
             if let Some(ctrl) = &self.tabs[i].ctrl {
                 unsafe { let _ = ctrl.SetIsVisible(false); }
             }
@@ -2372,6 +2672,7 @@ impl App {
                             self.ensure_view(self.active);
                         }
                         self.refresh_account(false);
+                        if let Some(popup) = &self.popup { if popup.ctrl.is_none() { let _ = engine::create_view(self.env.as_ref().unwrap(), popup.hwnd, POPUP_VIEW, &self.engine_profile(), false); } }
                     }
                     None => {
                         self.tabs[self.active].error = Some(ENGINE_MISSING.into());
@@ -2413,9 +2714,15 @@ impl App {
             Event::ViewReady(id, ctrl) => self.on_view_ready(id, ctrl),
             Event::NavStarting(id, uri) => {
                 self.hello_pending.retain(|(tab, _)| *tab != id);
-                if let Some(i) = self.index_of(id) { self.tabs[i].epoch += 1; self.tabs[i].sleep_check = false; self.tabs[i].external_launch = None; }
+                if let Some(i) = self.index_of(id) {
+                    let t = &mut self.tabs[i];
+                    t.epoch += 1; t.sleep_check = false; t.external_launch = None;
+                    if let Some(cancel) = t.tr_cancel.take() { cancel.store(true, std::sync::atomic::Ordering::Relaxed); }
+                    t.page_lang = None; t.translated = false; t.tr_pending = 0; t.tr_generation = t.tr_generation.wrapping_add(1); t.tr_error = false; t.tr_collecting = false; t.tr_limited = false; t.tr_declined = false;
+                }
                 if let Some(i) = self.index_of(id) {
                     self.on_nav_starting_adblock(i, &uri);
+                    if !self.tabs[i].loading { self.tabs[i].load_started = Some(Instant::now()); }
                     self.tabs[i].loading = true;
                     self.animate(); // Yükleme halkası dönsün.
                     self.invalidate();
@@ -2439,6 +2746,8 @@ impl App {
                 if ok {
                     tab.has_loaded = true;
                 }
+                if ok { self.detect_language(i); }
+                let tab = &mut self.tabs[i];
                 crate::log::line(&format!("YÜKLENDİ #{id} {} {}", if ok { "tamam" } else { "hata" }, status.0));
                 let (u, t, private) = (tab.url.clone(), tab.title.clone(), tab.private);
                 if ok && !u.is_empty() && !private && !url::is_internal(&u) {
@@ -2465,6 +2774,18 @@ impl App {
                 self.invalidate();
             }
             Event::SourceChanged(id) => {
+                if id == POPUP_VIEW && matches!(self.surface, Some(overlay::Surface::Link(_))) {
+                    if let Some(popup) = &mut self.popup {
+                        if let Some(view) = popup.ctrl.as_ref().and_then(|c| unsafe { c.CoreWebView2().ok() }) {
+                            let source = engine::string(|p| unsafe { view.Source(p) });
+                            if source.starts_with("http://") || source.starts_with("https://") {
+                                popup.url = source.clone(); self.surface = Some(overlay::Surface::Link(source));
+                                unsafe { let _ = InvalidateRect(Some(popup.hwnd), None, false); }
+                            }
+                        }
+                    }
+                    return;
+                }
                 let Some(i) = self.index_of(id) else { return };
                 let Some(view) = self.tabs[i].view.clone() else { return };
                 let source = engine::string(|p| unsafe { view.Source(p) });
@@ -2551,7 +2872,13 @@ impl App {
                     }
                 }
             }
-            Event::Shortcut(vk) => {
+            Event::LinkPreview(id, target) => {
+                if self.index_of(id) == Some(self.active) && (target.starts_with("https://") || target.starts_with("http://")) {
+                    self.open_surface(overlay::Surface::Link(target));
+                }
+            }
+            Event::Shortcut(id, vk) => {
+                if id == POPUP_VIEW && vk == VK_ESCAPE.0 as u32 { self.close_popup(); self.focus_content(); return; }
                 if let Some(cmd) = keys::command(vk, keys::modifiers(), false) {
                     self.run(cmd);
                 }
@@ -2600,12 +2927,30 @@ impl App {
                     if url::is_internal(&engine::string(|p| unsafe { v.Source(p) })) { engine::post_json(v, &json); }
                 }
             }
+            Event::OcrRequested(id) => {
+                if let Some(i) = self.index_of(id).filter(|i| *i == self.active) {
+                    self.ocr_request = self.ocr_request.wrapping_add(1);
+                    if let Some(view) = &self.tabs[i].view {
+                        let script = format!(r#"(()=>{{const p=window.__sqImagePoint,n=p&&document.elementFromPoint(...p);if(!n||n.tagName!=='IMG')return null;const r=n.getBoundingClientRect();return {{k:'ocr',e:{},request:{},rect:[r.x/innerWidth,r.y/innerHeight,r.width/innerWidth,r.height/innerHeight]}};}})()"#, self.tabs[i].epoch, self.ocr_request);
+                        engine::run_script(view, id, &script);
+                    }
+                }
+            }
+            Event::OcrCaptured(id, epoch, request, image) => {
+                if self.index_of(id) == Some(self.active) && self.tabs[self.active].epoch == epoch && self.ocr_request == request {
+                    if let Some(image) = image { crate::ocr::recognize(image, id, epoch, request); }
+                    else { self.open_surface(overlay::Surface::Notice("Görüntü yakalanamadı. Resmi görünür hale getirip tekrar dene.".into())); }
+                }
+            }
+            Event::Thumbnail(generation, id, image) => self.on_thumbnail(generation, id, image),
             Event::WebMessage(id, json) => self.on_web_message(id, &json),
             Event::DownloadStarted(id, op) => self.on_download_started(id, op),
             Event::DownloadChanged(id) => self.on_download_changed(id),
             Event::Script(id, result) => {
                 if id == ACCOUNT_VIEW {
                     self.on_account_json(&result);
+                } else {
+                    self.on_tab_script(id, &result);
                 }
             }
             Event::Extensions(list) => self.on_extensions(list),
@@ -2801,7 +3146,11 @@ impl App {
         let l = self.layout();
         let g = &self.gfx;
         if crate::theme::glass() { g.clear_transparent(); } else { g.clear(base()); }
-        if self.full_screen.is_none() {
+        if self.focus_mode && self.chrome_hidden() && self.full_screen.is_none() {
+            let (c, a) = toolbar_tint();
+            g.fill_alpha(Rect::new(0.0, 0.0, self.width as f32 / self.scale(), FOCUS_STRIP), c, a);
+        }
+        if !self.chrome_hidden() {
             let w = self.width as f32 / self.scale();
             // Cam katmanları: araç çubuğu, sekme şeridi ve aralarında ince çizgiler.
             let (c, a) = toolbar_tint();
@@ -2815,8 +3164,7 @@ impl App {
             }
             g.fill_alpha(Rect::new(0.0, l.content.y - 1.0, w, 1.0), line(), if is_dark() { 0.7 } else { 1.0 });
             self.paint_tabs(&l);
-            // Camda pencere düğmelerini Windows çizer.
-            if !crate::theme::glass() { self.paint_caption(&l); }
+            self.paint_caption(&l);
             self.paint_toolbar(&l);
             self.paint_bar(&l);
         }
@@ -2916,32 +3264,71 @@ impl App {
             self.paint_tab(r, None, &ghost.label, ghost.icon.as_deref(), ghost.active, false, false);
         }
         g.set_opacity(1.0);
+        if let Some(r) = l.mode {
+            // Gizli moddayken vurgu renginde dolu; normal modda gizli sekme sayısıyla.
+            let private = self.tabs[self.active].private;
+            if private { g.round(r, 7.0, accent()); } else { self.glass_chip(r, self.hover_amount(Hit::Mode).max(0.0)); }
+            g.text(ICON_PRIVATE, r, Font::MidIcon, if private { base() } else { ink() }, Align::Center);
+            if !private {
+                let count = self.tabs.iter().filter(|t| t.private).count();
+                // Rozet: normal yazı tipiyle (simge yazı tipinde rakam yoktur), 9'dan fazlası "9+".
+                let label = if count > 9 { "9+".to_string() } else { count.to_string() };
+                let bw = if count > 9 { 22.0 } else { 16.0 };
+                let b = Rect::new(r.right() - bw + 4.0, r.y - 3.0, bw, 16.0);
+                g.round(b.inset(-1.5, -1.5), 9.5, tabbar_tint().0);
+                g.round(b, 8.0, system_blue());
+                g.text(&label, b, Font::Small, 0xFFFFFF, Align::Center);
+            }
+        }
         let shown = self.shown_tabs(l);
-        // Etkin sekme: kayarak yer değiştiren yumuşak cam kart.
-        if let Some(target) = shown.get(self.active) {
-            let x = if self.selection_x.is_finite() && motion_enabled() { self.selection_x } else { target.x };
-            let w = if self.selection_w.is_finite() && motion_enabled() { self.selection_w } else { target.w };
-            let card = Rect::new(x, target.y, w, target.h);
+        // Sürüklenen sekme en üstte, kendi kartıyla çizilir; komşuların yazısı onun üstüne binmez.
+        let dragged = self.dragging_id().and_then(|id| self.index_of(id));
+        let card_style = |card: Rect| {
             let (c, a) = tab_active();
             g.round_alpha(card, 7.0, c, a);
             g.round_outline_alpha(card, 7.0, if is_dark() { 0xFFFFFF } else { 0x000000 }, 1.0, if is_dark() { 0.08 } else { 0.07 });
+        };
+        // Etkin sekme: kayarak yer değiştiren yumuşak cam kart.
+        if let Some(target) = shown.get(self.active).filter(|_| dragged != Some(self.active)) {
+            let x = if self.selection_x.is_finite() && motion_enabled() { self.selection_x } else { target.x };
+            let w = if self.selection_w.is_finite() && motion_enabled() { self.selection_w } else { target.w };
+            card_style(Rect::new(x, target.y, w, target.h));
         }
+        // Sürüklerken yalnızca tutulan sekme "üzerinde" sayılır (sıra değişse de).
+        let hovered_at = |i: usize| match dragged {
+            Some(d) => i == d,
+            None => matches!(self.hover, Hit::Tab(h) | Hit::TabClose(h) if h == i),
+        };
         // Etkin ya da üzerine gelinen sekmenin yanında olmayan ince ayraçlar.
-        let busy = |i: usize| i == self.active || matches!(self.hover, Hit::Tab(h) | Hit::TabClose(h) if h == i);
+        let busy = |i: usize| i == self.active || hovered_at(i);
         for (i, r) in shown.iter().enumerate().skip(1) {
             if !busy(i) && !busy(i - 1) && r.w > 24.0 {
                 g.fill_alpha(Rect::new(r.x - 1.0, r.y + 8.0, 1.0, r.h - 16.0), line(), if is_dark() { 0.9 } else { 1.0 });
             }
         }
-        for (i, (tab, r)) in self.tabs.iter().zip(&shown).enumerate() {
-            let asleep = tab.ctrl.is_none() && !tab.url.is_empty() && i != self.active;
-            g.set_opacity(tab.open_progress() * if asleep && !matches!(self.hover, Hit::Tab(h) if h == i) { 0.55 } else { 1.0 });
-            let hovered = matches!(self.hover, Hit::Tab(h) | Hit::TabClose(h) if h == i);
+        let label_of = |tab: &Tab| {
             // Henüz yüklenmemiş (uyuyan) sekmeler de diskteki simgesiyle görünür.
-            let icon = if tab.private { tab.icon.clone() } else { tab.icon.clone().or_else(|| self.icon_for(&tab.url)) };
-            self.paint_tab(*r, Some(tab), &tab.label(), icon.as_deref(), i == self.active, hovered, self.hover == Hit::TabClose(i));
+            if tab.private { tab.icon.clone() } else { tab.icon.clone().or_else(|| self.icon_for(&tab.url)) }
+        };
+        for (i, (tab, r)) in self.tabs.iter().zip(&shown).enumerate() {
+            if Some(i) == dragged { continue; }
+            let asleep = tab.ctrl.is_none() && !tab.url.is_empty() && i != self.active;
+            let hovered = hovered_at(i);
+            g.set_opacity(tab.open_progress() * if asleep && !hovered { 0.55 } else { 1.0 });
+            let close_hover = dragged.is_none() && self.hover == Hit::TabClose(i);
+            self.paint_tab(*r, Some(tab), &tab.label(), label_of(tab).as_deref(), i == self.active, hovered, close_hover);
         }
         g.set_opacity(1.0);
+        if let Some(d) = dragged {
+            let tab = &self.tabs[d];
+            let r = shown[d];
+            // Altındakini tamamen örten zemin, hafif gölge ve kart.
+            g.glow(r.cx(), r.cy() + 3.0, r.w * 0.5 + 6.0, r.h * 0.5 + 6.0, 0x000000, if is_dark() { 0.45 } else { 0.18 });
+            let (c, _) = tabbar_tint();
+            g.round(r, 7.0, c);
+            card_style(r);
+            self.paint_tab(r, Some(tab), &tab.label(), label_of(tab).as_deref(), d == self.active, true, false);
+        }
     }
 
     fn paint_caption(&self, l: &Layout) {
@@ -2952,11 +3339,31 @@ impl App {
             (l.max, Hit::Max, if maximized { ICON_RESTORE } else { ICON_MAX }),
             (l.close, Hit::Close, ICON_CLOSE),
         ] {
-            let hovered = self.hover == hit;
-            if hovered {
-                if hit == Hit::Close { g.fill(r, 0xC42B1C); } else { g.fill_alpha(r, hover(), 0.8); }
+            // Araç çubuğundaki düğmelerle aynı boy ve aynı orta çizgi.
+            let mut b = Rect::new(r.cx() - 18.0, TOOL_ROW / 2.0 - 16.0, 36.0, 32.0);
+            if self.pressed == hit { b = b.inset(1.0, 1.0); }
+            let amount = self.hover_amount(hit);
+            if amount > 0.0 {
+                if hit == Hit::Close {
+                    g.round_alpha(b, 8.0, if self.pressed == hit { 0xC42B1C } else { 0xE5484D }, amount);
+                } else {
+                    self.glass_chip(b, amount);
+                }
             }
-            g.text(icon, r, Font::SmallIcon, if hovered && hit == Hit::Close { 0xFFFFFF } else if hovered { ink() } else { muted() }, Align::Center);
+            let color = if hit == Hit::Close && amount > 0.5 { 0xFFFFFF } else if amount > 0.0 { ink() } else { muted() };
+            g.text(icon, b, Font::SmallIcon, color, Align::Center);
+        }
+    }
+
+    /// Yumuşak kenarlı cam zemin: üzerine gelinen düğmeler ve camdaki alanlar için.
+    fn glass_chip(&self, r: Rect, amount: f32) {
+        let g = &self.gfx;
+        if is_dark() {
+            g.round_alpha(r, 8.0, 0xFFFFFF, 0.12 * amount);
+            g.round_outline_alpha(r, 8.0, 0xFFFFFF, 1.0, 0.08 * amount);
+        } else {
+            g.round_alpha(r, 8.0, 0x000000, 0.07 * amount);
+            g.round_outline_alpha(r, 8.0, 0x000000, 1.0, 0.05 * amount);
         }
     }
 
@@ -2975,10 +3382,18 @@ impl App {
         if !motion_enabled() { return if self.hover == hit { 1.0 } else { 0.0 }; }
         if self.hover == hit { self.hover_progress } else if self.previous_hover == hit { 1.0 - self.hover_progress } else { 0.0 }
     }
+    /// Adres alanının içindeki düğmeler: alan rengine göre belirgin, yumuşak geçişli.
+    fn field_button(&self, r: Rect, hit: Hit) {
+        let amount = self.hover_amount(hit);
+        if amount > 0.0 {
+            self.gfx.round_alpha(r, 7.0, if is_dark() { 0x5A5A5E } else { 0xD1D1D6 }, amount);
+        }
+    }
+
     fn tool_button(&self, mut r: Rect, hit: Hit, active: bool) {
         let amount = if active { 1.0 } else { self.hover_amount(hit) };
         if self.pressed == hit { r = Rect::new(r.x + 1.0, r.y + 1.0, (r.w - 2.0).max(0.0), (r.h - 2.0).max(0.0)); }
-        if amount > 0.0 { self.gfx.round_alpha(r, 8.0, hover(), amount); }
+        if amount > 0.0 { self.glass_chip(r, amount); }
     }
 
     fn paint_toolbar(&self, l: &Layout) {
@@ -2987,6 +3402,7 @@ impl App {
         for (r, hit, icon, enabled) in [
             (l.back, Hit::Back, ICON_BACK, tab.can_back),
             (l.forward, Hit::Forward, ICON_FORWARD, tab.can_forward),
+            (l.home, Hit::Home, ICON_HOME, true),
             (l.new_tab, Hit::NewTab, ICON_ADD, true),
         ] {
             if enabled {
@@ -3001,9 +3417,17 @@ impl App {
         if focused {
             g.round_alpha(Rect::new(l.address.x - 3.0, l.address.y - 3.0, l.address.w + 6.0, l.address.h + 6.0), 12.0, accent(), 0.35);
         }
-        g.round(l.address, 9.0, address_field());
-        if self.hover == Hit::Address && !editing {
-            g.round_alpha(l.address, 9.0, hover(), 0.6);
+        if editing {
+            g.round(l.address, 9.0, address_field());
+        } else {
+            let lift = self.hover_amount(Hit::Address);
+            if is_dark() {
+                g.round_alpha(l.address, 9.0, 0xFFFFFF, 0.09 + 0.05 * lift);
+                g.round_outline_alpha(l.address, 9.0, 0xFFFFFF, 1.0, 0.07 + 0.05 * lift);
+            } else {
+                g.round_alpha(l.address, 9.0, 0x000000, 0.055 + 0.03 * lift);
+                g.round_outline_alpha(l.address, 9.0, 0x000000, 1.0, 0.04 + 0.03 * lift);
+            }
         }
         if focused {
             g.round_outline(l.address, 9.0, accent(), 1.5);
@@ -3032,30 +3456,30 @@ impl App {
             }
             g.text(&shown, Rect::new(gx + if secure { 18.0 } else { 0.0 }, l.address.y, tw + 2.0, l.address.h), Font::Ui, ink(), Align::Left);
         }
-        // Yükleniyor: adres alanının altında ilerleyen ince vurgu çizgisi.
+        // Yükleniyor (Safari gibi): alanın altında soldan dolan mavi çizgi.
+        // Süre ilerledikçe yavaşlayarak %90'a yaklaşır; sayfa bitince kaybolur.
         if tab.loading {
-            let t = (self.t0.elapsed().as_secs_f32() / 1.6).fract();
-            let bw = l.address.w * 0.28;
-            let bx = l.address.x + (l.address.w + bw) * ease_out(t) - bw;
-            let x0 = bx.max(l.address.x + 6.0);
-            let x1 = (bx + bw).min(l.address.right() - 6.0);
-            if x1 > x0 { g.round(Rect::new(x0, l.address.bottom() - 2.5, x1 - x0, 2.0), 1.0, accent()); }
+            let t = tab.load_started.map_or(0.0, |s| s.elapsed().as_secs_f32());
+            let p = 0.08 + 0.84 * (1.0 - (-t / 1.8).exp());
+            let track = Rect::new(l.address.x + 8.0, l.address.bottom() - 2.5, l.address.w - 16.0, 2.0);
+            g.round(Rect::new(track.x, track.y, track.w * p, track.h), 1.0, system_blue());
         }
         // Yenile / durdur: adres alanının sağ ucunda.
         if !tab.url.is_empty() {
-            if self.hover == Hit::Reload { g.round_alpha(l.reload, 6.0, hover(), 0.9); }
-            g.text(if tab.loading { ICON_STOP } else { ICON_RELOAD }, l.reload, Font::MidIcon, muted(), Align::Center);
+            self.field_button(l.reload, Hit::Reload);
+            g.text(if tab.loading { ICON_STOP } else { ICON_RELOAD }, l.reload, Font::MidIcon, if self.hover == Hit::Reload { ink() } else { muted() }, Align::Center);
         }
 
+        if let Some(r) = l.translate {
+            self.paint_translate(r);
+        }
         if let Some(r) = l.shield {
             self.paint_shield(r);
         }
         // Yıldız: sayfa yer işaretlerindeyse dolu ve vurgu renginde.
         let can_star = !tab.url.is_empty() && !url::is_internal(&tab.url);
         if can_star {
-            if self.hover == Hit::Star {
-                g.round_alpha(l.star, 6.0, hover(), 0.9);
-            }
+            self.field_button(l.star, Hit::Star);
             let starred = self.is_bookmarked(&tab.url);
             g.text(if starred { ICON_STAR_FILLED } else { ICON_STAR }, l.star, Font::MidIcon, if starred { accent() } else { muted() }, Align::Center);
         }
@@ -3112,6 +3536,8 @@ impl App {
         }
 
         let open = self.menu.as_ref().map(|m| m.kind);
+        self.tool_button(l.share, Hit::Share, open == Some(MenuKind::Share));
+        g.text(ICON_SHARE, l.share, Font::Icon, ink(), Align::Center);
         self.tool_button(l.puzzle, Hit::Puzzle, open == Some(MenuKind::Extensions));
         g.text(ICON_PUZZLE, l.puzzle, Font::Icon, ink(), Align::Center);
 

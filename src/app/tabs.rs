@@ -167,11 +167,17 @@ impl App {
                 self.active += 1;
             }
             self.dirty = true;
+            self.hover = Hit::Tab(to);
+            self.previous_hover = Hit::None;
         }
         if let Some(k) = self.index_of(id) {
-            let left = 8.0;
-            let max_x = l.tabs.last().map_or(left, |r| r.x);
-            self.tabs[k].x = (x - grab).clamp(left, max_x);
+            // Şeridin içinde kalır: aynı moddaki ilk ve son sekmenin arası.
+            let private = self.tabs[k].private;
+            let visible: Vec<Rect> = self.tabs.iter().zip(&l.tabs).filter(|(t, _)| t.private == private).map(|(_, r)| *r).collect();
+            let min_x = visible.first().map_or(8.0, |r| r.x);
+            let max_x = visible.last().map_or(min_x, |r| r.x).max(min_x);
+            self.tabs[k].x = (x - grab).clamp(min_x, max_x);
+            if k == self.active { self.selection_x = self.tabs[k].x; self.selection_w = self.tabs[k].w; }
         }
         self.animate();
         self.invalidate();
@@ -182,6 +188,7 @@ impl App {
     pub(super) fn end_drag(&mut self) -> bool {
         let Some(d) = self.drag.take() else { return false };
         unsafe { let _ = ReleaseCapture(); }
+        if d.moving { self.drop_snap = Some(d.id); }
         self.animate();
         d.moving
     }

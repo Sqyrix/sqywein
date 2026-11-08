@@ -54,6 +54,14 @@ Ayrıntılı ölçüm yöntemi ve Edge/Chrome karşılaştırması: [PERFORMANCE
 
 ## Özellikler
 
+> Sürümden sürüme yenilikler: [CHANGELOG.md](CHANGELOG.md)
+
+### 0.4.0 ile gelenler
+- **Sayfa çevirisi:** Yabancı dildeki siteler kendiliğinden Türkçeye (ya da bilgisayarının diline) çevrilir; adres alanındaki **文A** ile kapatılır.
+- **Başlangıç sayfası:** Favoriler (sık girdiğin siteler kendiliğinden eklenir), havaya göre şekillenen Liquid Glass hava durumu kartı ve döviz kartı.
+- **macOS'tan esinlenen araçlar:** Hızlı erişim, sekme ızgarası, bağlantı önizlemesi, Hızlı Bakış, Canlı Metin, görüntü içinde görüntü, odak modu, paylaşım paneli (QR kod).
+- **Gizli ↔ normal sekme geçişi**, ana sayfa düğmesi, daha akıcı sekme sürükleme ve daha net yazılar.
+
 ### Arayüz
 - **Safari tarzı düzen:** Üstte tek satır araç çubuğu, tam ortada adres alanı, altında eşit genişlikte sekmeler.
 - **Cam efekti:** Araç çubuğu, sekmeler, menüler ve başlangıç sayfası Windows 11'in bulanık camıyla yarı saydam görünür. İstersen Ayarlar'dan kapatabilirsin.
@@ -72,6 +80,13 @@ Ayrıntılı ölçüm yöntemi ve Edge/Chrome karşılaştırması: [PERFORMANCE
 - **Site izinleri:** Kamera, mikrofon, konum, bildirim ve pano izinleri ayarlardan yönetilir.
 
 ### Günlük kullanım
+- **Çeviri paneli:** Hedef dil Windows'un görüntüleme dilinden alınır. Kaynak/hedef dil seçimi, daima/asla çeviri ve site istisnaları vardır. Çevrilen metin Google'a gönderilir.
+- **Hızlı erişim:** `Ctrl+Space` ile sekmeler, geçmiş, yer işaretleri ve komutlar tek aramada.
+- **Sekmelere genel bakış:** `Ctrl+Shift+A` ile küçük resimli, filtrelenebilir ızgara.
+- **Bağlantı önizlemesi:** `Shift+tık`; sayfayı ayrı sekmeye geçmeden incele, istersen “Sekmede aç”.
+- **Hızlı Bakış:** Tamamlanan indirmeye basılı tut; resim, PDF ve metin dosyalarını harici uygulama açmadan incele.
+- **Canlı Metin:** Resme sağ tık → “Canlı Metin”; görünür bölümdeki yazıyı Windows OCR ile yerel olarak tanı ve kopyala.
+- **Odak modu, paylaşım paneli ve görüntü içinde görüntü.** Ayrıntılar ve sınırlar: [UTILITIES.md](UTILITIES.md).
 - **Chrome Web Mağazası uzantıları:** Mağaza sayfasında "Sqywein'e ekle" düğmesi çıkar. Kurmadan önce uzantının istediği izinler gösterilir.
 - **İndirmeler:** İlerleme halkası, hız ve kalan süre. Dosya türüne göre doğru simge.
 - **Oturum geri yükleme:** Açık sekmeler, pencere boyutu ve yeri bir sonraki açılışta aynen gelir. Google gibi sitelerdeki oturumların kapanmaz.
@@ -162,6 +177,10 @@ Bütün veriler bilgisayarında, `%LOCALAPPDATA%\Sqywein` klasöründedir. Hiçb
 
 | Kısayol | İşlev |
 |---|---|
+| **Ctrl+Space** | Hızlı erişim |
+| **Ctrl+Shift+A** | Sekmelere genel bakış |
+| **Ctrl+Shift+Y** | Çevir / orijinale dön |
+| **Ctrl+Shift+F** | Odak modu |
 | **Ctrl+T** | Yeni sekme |
 | **Ctrl+Shift+N** | Yeni gizli sekme |
 | **Ctrl+W** / **Ctrl+F4** | Sekmeyi kapat |
@@ -180,6 +199,12 @@ Bütün veriler bilgisayarında, `%LOCALAPPDATA%\Sqywein` klasöründedir. Hiçb
 | **Ctrl+P** | Yazdır |
 | **Ctrl + / Ctrl −** | Yakınlaştır / uzaklaştır |
 | **F12** | Geliştirici araçları |
+| **Ctrl+Space** | Hızlı erişim (sekme, geçmiş, yer işareti, komut) |
+| **Ctrl+Shift+A** | Sekmelere genel bakış |
+| **Ctrl+Shift+Y** | Sayfayı çevir / orijinale dön |
+| **Ctrl+Shift+F** | Odak modu |
+| **Ctrl+Shift+P** | Gizli ↔ normal sekmeler |
+| **Shift+tık** | Bağlantı önizlemesi |
 
 ---
 

@@ -14,7 +14,7 @@ use windows::{
     core::*,
     Win32::{
         Foundation::*,
-        Graphics::{Dwm::*, Gdi::InvalidateRect},
+        Graphics::{Dwm::*, Gdi::{InvalidateRect, GetMonitorInfoW, MonitorFromPoint, MonitorFromWindow, MONITOR_DEFAULTTONEAREST, MONITORINFO}},
         System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::*,
     },
@@ -32,10 +32,33 @@ pub enum MenuKind {
     Shield,
     SavePassword,
     TabContext,
+    Share,
+    Translate,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MenuCmd {
+    SwitchMode,
+    Spotlight,
+    Overview,
+    PreviewDownload(u32),
+    TranslationOptions,
+    TranslationLanguages(bool),
+    TranslationLanguagePage(bool, usize),
+    TranslationLanguage(bool, usize),
+    TranslationAlways,
+    TranslationNever,
+    TranslationSite,
+    TranslationSettings,
+    TranslationOriginal,
+    TranslationClose,
+    Translate,
+    OpenShare,
+    CopyLink,
+    ShareWindows,
+    EmailLink,
+    FocusMode,
+    PictureInPicture,
     NewTab,
     PrivateTab,
     History,
@@ -102,6 +125,7 @@ pub struct Header {
 }
 
 pub enum Item {
+    Translation { source: String, target: String, translated: bool },
     Header(Header),
     Action {
         label: String,
@@ -117,6 +141,8 @@ pub enum Item {
     Download(DownloadRow),
     /// Filtreleme modu kaydırıcısı (site adı, seçili mod 0..3).
     Slider { title: String, level: u8 },
+    /// Sayfa adresinin QR kodu (kenar, satır satır koyu hücreler).
+    Qr { size: usize, cells: Vec<bool> },
 }
 
 impl Item {
@@ -130,12 +156,14 @@ impl Item {
 
     fn height(&self) -> f32 {
         match self {
+            Item::Translation { .. } => 48.0,
             Item::Header(_) => 72.0,
             Item::Action { .. } => 34.0,
             Item::Sep => 9.0,
             Item::Zoom => 38.0,
             Item::Download(_) => 62.0,
             Item::Slider { .. } => 136.0,
+            Item::Qr { .. } => 214.0,
         }
     }
 }
@@ -143,6 +171,10 @@ impl Item {
 /// Menüdeki bir noktanın karşılığı.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Part {
+    TranslationSource,
+    TranslationClose,
+    TranslationTarget,
+    TranslationOptions,
     Level(u8),
     Row(usize),
     Side(usize),
@@ -168,6 +200,10 @@ pub struct Menu {
     alpha: u8,
     exit_alpha: u8,
     exiting: bool,
+    /// Kaydırıcı sürüklenirken düğmenin x konumu (DIP).
+    drag: Option<f32>,
+    hold: Option<Part>,
+    scroll: f32,
 }
 
 const FADE_MS: f32 = 160.0;
@@ -196,12 +232,19 @@ impl Menu {
     pub fn open(owner: HWND, kind: MenuKind, anchor: POINT, dpi: u32, items: Vec<Item>, zoom: Option<f64>, hardware: bool) -> Result<Self> {
         let s = dpi as f32 / 96.0;
         let h: f32 = items.iter().map(Item::height).sum::<f32>() + 2.0 * PAD;
-        let (wpx, hpx) = ((MENU_WIDTH * s).round() as i32, (h * s).round() as i32);
+        let (mut wpx, mut hpx) = (((if kind == MenuKind::Translate { 380.0 } else { MENU_WIDTH }) * s).round() as i32, (h * s).round() as i32);
+        let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+        unsafe { let _ = GetMonitorInfoW(MonitorFromPoint(anchor, MONITOR_DEFAULTTONEAREST), &mut info); }
+        let work = info.rcWork;
+        hpx = hpx.min((work.bottom - work.top - 16).max(100));
+        wpx = wpx.min((work.right - work.left - 16).max(100));
+        let anchor = POINT { x: anchor.x.clamp(work.left + wpx, work.right), y: anchor.y.clamp(work.top, work.bottom - hpx) };
         unsafe {
             let instance: HINSTANCE = GetModuleHandleW(None)?.into();
             // Katmanlı pencere: açılırken saydamlıktan netliğe geçer.
             // Camda katmanlı pencere kullanılamaz (Windows camı çizmez): o zaman yalnızca kayarak açılır.
-            let glass = crate::theme::glass();
+            // Menüler opaktır: yazılar ClearType ile tam keskin çizilir (camda ClearType çalışmaz).
+            let glass = false;
             let hwnd = CreateWindowExW(
                 WS_EX_TOOLWINDOW | if glass { WINDOW_EX_STYLE(0) } else { WS_EX_LAYERED },
                 CLASS,
@@ -230,16 +273,16 @@ impl Menu {
             if glass && crate::app::apply_backdrop(hwnd, true) {
                 gfx.set_glass(true);
             }
-            Ok(Self { hwnd, kind, gfx, items, hover: None, zoom, dpi, size: (wpx as u32, hpx as u32), fade: if motion_enabled() { Some((std::time::Instant::now(), target)) } else { None }, alpha: if motion_enabled() { 0 } else { 255 }, exit_alpha: 255, exiting: false })
+            Ok(Self { hwnd, kind, gfx, items, hover: None, zoom, dpi, size: (wpx as u32, hpx as u32), fade: if motion_enabled() { Some((std::time::Instant::now(), target)) } else { None }, alpha: if motion_enabled() { 0 } else { 255 }, exit_alpha: 255, exiting: false, drag: None, hold: None, scroll: 0.0 })
         }
     }
 
     fn rows(&self) -> Vec<Rect> {
-        let mut y = PAD;
+        let mut y = PAD - self.scroll;
         self.items
             .iter()
             .map(|it| {
-                let r = Rect::new(0.0, y, MENU_WIDTH, it.height());
+                let r = Rect::new(0.0, y, self.size.0 as f32 * 96.0 / self.dpi as f32, it.height());
                 y += it.height();
                 r
             })
@@ -258,15 +301,50 @@ impl Menu {
         (minus, value, plus)
     }
 
-    pub fn hit(&self, lparam: LPARAM) -> Option<Part> {
+    fn point(&self, lparam: LPARAM) -> (f32, f32) {
         let s = self.dpi as f32 / 96.0;
-        let x = (lparam.0 & 0xFFFF) as i16 as f32 / s;
-        let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as f32 / s;
+        ((lparam.0 & 0xFFFF) as i16 as f32 / s, ((lparam.0 >> 16) & 0xFFFF) as i16 as f32 / s)
+    }
+
+    /// Kaydırıcının yolu (x0, x1) ve seçili seviyesi; menüde kaydırıcı yoksa `None`.
+    fn slider(&self) -> Option<(f32, f32, u8)> {
+        self.items.iter().zip(self.rows()).find_map(|(item, r)| match item {
+            Item::Slider { level, .. } => { let (x0, x1, _) = Self::slider_track(r); Some((x0, x1, *level)) }
+            _ => None,
+        })
+    }
+
+    /// Basılan yer kaydırıcıdaysa sürükleme başlar.
+    pub fn begin_drag(&mut self, lparam: LPARAM) -> bool {
+        if !matches!(self.hit(lparam), Some(Part::Level(_))) { return false; }
+        let Some((x0, x1, _)) = self.slider() else { return false };
+        self.drag = Some(self.point(lparam).0.clamp(x0, x1));
+        true
+    }
+
+    pub fn dragging(&self) -> bool { self.drag.is_some() }
+
+    pub fn drag_to(&mut self, lparam: LPARAM) {
+        if let (Some(_), Some((x0, x1, _))) = (self.drag, self.slider()) {
+            self.drag = Some(self.point(lparam).0.clamp(x0, x1));
+        }
+    }
+
+    /// Sürükleme biter; bırakılan yere en yakın seviye döner.
+    pub fn end_drag(&mut self) -> Option<u8> {
+        let x = self.drag.take()?;
+        let (x0, x1, _) = self.slider()?;
+        Some((((x - x0) / ((x1 - x0) / 3.0)).round()).clamp(0.0, 3.0) as u8)
+    }
+
+    pub fn hit(&self, lparam: LPARAM) -> Option<Part> {
+        let (x, y) = self.point(lparam);
         for (i, (item, r)) in self.items.iter().zip(self.rows()).enumerate() {
             if !r.contains(x, y) {
                 continue;
             }
             return match item {
+                Item::Translation { .. } => Some(if x > r.right() - 40.0 { Part::TranslationClose } else if x > r.right() - 80.0 { Part::TranslationOptions } else if x < r.cx() - 36.0 { Part::TranslationSource } else { Part::TranslationTarget }),
                 Item::Action { enabled: true, side, .. } => {
                     if side.is_some() && x >= r.right() - SIDE_W {
                         Some(Part::Side(i))
@@ -306,6 +384,49 @@ impl Menu {
         None
     }
 
+    pub fn scroll_by(&mut self, delta: f32) {
+        self.cancel_hold(); self.hover = None;
+        let content = self.items.iter().map(Item::height).sum::<f32>() + 2.0 * PAD;
+        let visible = self.size.1 as f32 * 96.0 / self.dpi as f32;
+        self.scroll = (self.scroll + delta).clamp(0.0, (content - visible).max(0.0));
+        unsafe { let _ = InvalidateRect(Some(self.hwnd), None, false); }
+    }
+    pub fn begin_hold(&mut self, lparam: LPARAM) {
+        self.hold = self.hit(lparam).filter(|p| matches!(p, Part::Row(i) if matches!(self.items.get(*i), Some(Item::Download(d)) if d.done)));
+        if self.hold.is_some() { unsafe { SetTimer(Some(self.hwnd), 2, 500, None); } }
+    }
+    pub fn cancel_hold_if_moved(&mut self, part: Option<Part>) { if self.hold != part { self.cancel_hold(); } }
+    pub fn cancel_hold(&mut self) { self.hold = None; unsafe { let _ = KillTimer(Some(self.hwnd), 2); } }
+    pub fn hold_command(&mut self) -> Option<MenuCmd> {
+        let part = self.hold.take(); self.cancel_hold();
+        match part { Some(Part::Row(i)) => match self.items.get(i) { Some(Item::Download(d)) if d.done => Some(MenuCmd::PreviewDownload(d.id)), _ => None }, _ => None }
+    }
+    pub fn keyboard(&mut self, key: u32) -> Option<MenuCmd> {
+        let parts: Vec<Part> = self.items.iter().enumerate().flat_map(|(i, item)| match item {
+            Item::Translation { .. } => vec![Part::TranslationSource, Part::TranslationTarget, Part::TranslationOptions, Part::TranslationClose],
+            Item::Action { enabled: true, .. } => vec![Part::Row(i)],
+            Item::Download(d) if d.done => vec![Part::Row(i), Part::Side(i)],
+            _ => vec![],
+        }).collect();
+        if key == 0x20 && !crate::keys::modifiers().ctrl {
+            if let Some(Part::Row(i)) = self.hover { if let Some(Item::Download(d)) = self.items.get(i) { if d.done { return Some(MenuCmd::PreviewDownload(d.id)); } } }
+        }
+        if key == 0x0D { return self.hover.and_then(|p| self.command(p)); }
+        if parts.is_empty() || ![0x26, 0x28, 0x09, 0x25, 0x27].contains(&key) { return None; }
+        let back = key == 0x26 || key == 0x25;
+        let index = self.hover.and_then(|p| parts.iter().position(|v| *v == p));
+        let next = match index { Some(i) if back => (i + parts.len() - 1) % parts.len(), Some(i) => (i + 1) % parts.len(), None => if back { parts.len() - 1 } else { 0 } };
+        let part = parts[next];
+        let row = match part { Part::Row(i) | Part::Side(i) => self.rows().get(i).copied(), _ => self.rows().first().copied() };
+        if let Some(row) = row {
+            let visible = self.size.1 as f32 * 96.0 / self.dpi as f32;
+            if row.y < PAD { self.scroll_by(row.y - PAD); }
+            else if row.bottom() > visible - PAD { self.scroll_by(row.bottom() - visible + PAD); }
+        }
+        self.set_hover(Some(part)); unsafe { let _ = InvalidateRect(Some(self.hwnd), None, false); } None
+    }
+    pub fn translation_summary(&self) -> bool { self.items.len() == 4 && matches!(self.items.first(), Some(Item::Translation { .. })) }
+
     /// Fare hareketi; çizim gerekiyorsa `true`.
     pub fn set_hover(&mut self, part: Option<Part>) -> bool {
         let changed = self.hover != part;
@@ -315,6 +436,10 @@ impl Menu {
 
     pub fn command(&self, part: Part) -> Option<MenuCmd> {
         match part {
+            Part::TranslationClose => Some(MenuCmd::TranslationClose),
+            Part::TranslationSource => Some(MenuCmd::TranslationOriginal),
+            Part::TranslationTarget => Some(MenuCmd::Translate),
+            Part::TranslationOptions => Some(MenuCmd::TranslationOptions),
             Part::Level(n) => Some(MenuCmd::SetAdblockLevel(n)),
             Part::Minus => Some(MenuCmd::ZoomOut),
             Part::Plus => Some(MenuCmd::ZoomIn),
@@ -367,16 +492,24 @@ impl Menu {
 
     /// Menü açıkken içeriği değişti (ör. uzantı sabitlendi).
     pub fn set_items(&mut self, items: Vec<Item>) {
+        self.cancel_hold();
+        self.hover = None;
         self.items = items;
+        self.scroll = 0.0;
         // Satır sayısı değiştiyse pencere ve çizim yüzeyi yeni boya göre ayarlanır.
         let s = self.dpi as f32 / 96.0;
         let h: f32 = self.items.iter().map(Item::height).sum::<f32>() + 2.0 * PAD;
-        let hpx = (h * s).round() as u32;
+        let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+        unsafe { let _ = GetMonitorInfoW(MonitorFromWindow(self.hwnd, MONITOR_DEFAULTTONEAREST), &mut info); }
+        let hpx = ((h * s).round() as u32).min((info.rcWork.bottom - info.rcWork.top - 16).max(100) as u32);
         if hpx != self.size.1 {
             self.size.1 = hpx;
             self.gfx.resize(self.size.0, hpx);
             unsafe {
-                let _ = SetWindowPos(self.hwnd, None, 0, 0, self.size.0 as i32, hpx as i32, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+                let mut rect = RECT::default(); let _ = GetWindowRect(self.hwnd, &mut rect);
+                let y = rect.top.min(info.rcWork.bottom - hpx as i32).max(info.rcWork.top);
+                if let Some((_, target)) = &mut self.fade { target.y = y; }
+                let _ = SetWindowPos(self.hwnd, None, rect.left, y, self.size.0 as i32, hpx as i32, SWP_NOZORDER | SWP_NOACTIVATE);
             }
         }
         unsafe { let _ = InvalidateRect(Some(self.hwnd), None, false); }
@@ -388,8 +521,8 @@ impl Menu {
             return;
         }
         let g = &self.gfx;
-        let full = Rect::new(0.0, 0.0, MENU_WIDTH, h as f32 * 96.0 / self.dpi as f32);
-        if crate::theme::glass() {
+        let full = Rect::new(0.0, 0.0, w as f32 * 96.0 / self.dpi as f32, h as f32 * 96.0 / self.dpi as f32);
+        if self.gfx.is_glass() {
             g.clear_transparent();
             let (c, a) = crate::theme::menu_tint();
             g.fill_alpha(full, c, a);
@@ -400,6 +533,19 @@ impl Menu {
 
         for (i, (item, r)) in self.items.iter().zip(self.rows()).enumerate() {
             match item {
+                Item::Translation { source, target, translated } => {
+                    let width = (r.w - 88.0) / 2.0;
+                    for (j, label) in [source, target].iter().enumerate() {
+                        let tab = Rect::new(r.x + 8.0 + j as f32 * width, r.y + 4.0, width, r.h - 8.0);
+                        let selected = *translated == (j == 1);
+                        if self.hover == Some(if j == 0 { Part::TranslationSource } else { Part::TranslationTarget }) { g.round(tab.inset(2.0, 3.0), 6.0, hover()); }
+                        g.text(label, tab, Font::UiBold, if selected { accent() } else { muted() }, Align::Center);
+                        if selected { g.fill(Rect::new(tab.x + 8.0, tab.bottom() - 2.0, tab.w - 16.0, 2.0), accent()); }
+                    }
+                    for (part, x) in [(Part::TranslationOptions, r.right() - 76.0), (Part::TranslationClose, r.right() - 40.0)] { if self.hover == Some(part) { g.round(Rect::new(x, r.y + 8.0, 32.0, 32.0), 6.0, hover()); } }
+                    for dx in [-5.0, 0.0, 5.0] { g.circle(r.right() - 60.0 + dx, r.cy(), 1.4, ink()); }
+                    g.text(ICON_CLOSE, Rect::new(r.right() - 40.0, r.y, 32.0, r.h), Font::SmallIcon, ink(), Align::Center);
+                }
                 Item::Header(head) => {
                     let card = r.inset(8.0, 4.0);
                     g.round(card, 10.0, hover());
@@ -433,22 +579,37 @@ impl Menu {
                     let (x0, x1, cy) = Self::slider_track(r);
                     let step = (x1 - x0) / 3.0;
                     let at = |n: u8| x0 + n as f32 * step;
-                    // Yol: seçili moda kadar vurgu renginde, sonrası sönük; aralarda ince boşluklar.
-                    for n in 0..3u8 {
-                        let seg = Rect::new(at(n) + 1.0, cy - 7.0, step - 2.0, 14.0);
-                        let filled = n < *level;
-                        g.round_alpha(seg, 4.0, if filled { accent() } else { line() }, if filled { 0.85 } else { 1.0 });
-                    }
+                    // Apple tarzı: ince yol, dolu kısım vurgu renginde, beyaz yuvarlak düğme.
+                    let knob_x = self.drag.unwrap_or(at(*level));
+                    let shown = (((knob_x - x0) / step).round()).clamp(0.0, 3.0) as u8;
+                    g.round(Rect::new(x0 - 3.0, cy - 3.0, x1 - x0 + 6.0, 6.0), 3.0, line());
+                    g.round(Rect::new(x0 - 3.0, cy - 3.0, knob_x - x0 + 6.0, 6.0), 3.0, accent());
                     for n in 0..=3u8 {
-                        if self.hover == Some(Part::Level(n)) && n != *level {
-                            g.round(Rect::new(at(n) - 14.0, cy - 14.0, 28.0, 28.0), 8.0, hover());
+                        let filled = at(n) <= knob_x + 0.5;
+                        g.circle(at(n), cy, 4.0, if filled { accent() } else { line() });
+                        if self.hover == Some(Part::Level(n)) && self.drag.is_none() && n != *level {
+                            g.round_alpha(Rect::new(at(n) - 14.0, cy - 14.0, 28.0, 28.0), 14.0, hover(), 0.8);
                         }
                     }
-                    let knob = Rect::new(at(*level) - 22.0, cy - 22.0, 44.0, 44.0);
-                    g.round(knob, 12.0, accent());
+                    let grow = if self.drag.is_some() { 2.0 } else { 0.0 };
+                    g.glow(knob_x, cy + 2.0, 20.0, 20.0, 0x000000, 0.35);
+                    g.circle(knob_x, cy, 13.0 + grow, 0xFFFFFF);
                     g.text("filtreleme modu", Rect::new(r.x, cy + 28.0, r.w, 18.0), Font::Small, muted(), Align::Center);
-                    let name = crate::adblock::LEVEL_NAMES[*level as usize];
+                    let name = crate::adblock::LEVEL_NAMES[shown as usize];
                     g.text(name, Rect::new(r.x, cy + 46.0, r.w, 20.0), Font::UiBold, accent(), Align::Center);
+                }
+                Item::Qr { size, cells } => {
+                    // Telefon kamerasıyla okunur: beyaz kart üzerinde siyah hücreler.
+                    let card = Rect::new(r.cx() - 98.0, r.y + 8.0, 196.0, 196.0);
+                    g.round(card, 14.0, 0xFFFFFF);
+                    let cell = 168.0 / *size as f32;
+                    let (x0, y0) = (card.x + 14.0, card.y + 14.0);
+                    for (k, dark) in cells.iter().enumerate() {
+                        if *dark {
+                            let (cx, cy) = ((k % size) as f32, (k / size) as f32);
+                            g.fill(Rect::new(x0 + cx * cell, y0 + cy * cell, cell + 0.35, cell + 0.35), 0x000000);
+                        }
+                    }
                 }
                 Item::Download(d) => {
                     if self.hover == Some(Part::Row(i)) && d.done {

@@ -30,6 +30,17 @@ pub struct Bookmark {
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
+    /// Empty target follows the Windows locale. Automatic translation is opt-in per language.
+    pub translation_target: String,
+    pub translation_always: Vec<String>,
+    pub translation_never: Vec<String>,
+    pub translation_sites: Vec<String>,
+    /// Ana dil dışındaki sayfalar açılınca kendiliğinden çevrilsin mi?
+    pub translation_auto: bool,
+    /// Başlangıç sayfasında hava durumu ve döviz kartları.
+    pub show_widgets: bool,
+    /// Hava durumu için elle yazılan şehir; boşsa Windows konumu kullanılır.
+    pub weather_city: String,
     pub theme: String,
     pub search_engine: String,
     pub startup: String,
@@ -63,6 +74,13 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            translation_target: String::new(),
+            translation_always: Vec::new(),
+            translation_never: Vec::new(),
+            translation_sites: Vec::new(),
+            translation_auto: true,
+            show_widgets: true,
+            weather_city: String::new(),
             theme: "system".into(),
             search_engine: "google".into(),
             startup: "restore".into(),
@@ -155,6 +173,9 @@ pub struct AppState {
     /// Ana sayfadaki kısayol kutucukları.
     #[serde(default)]
     pub shortcuts: Vec<Bookmark>,
+    /// Favorilerden silinen siteler: sık ziyaret edilse de kendiliğinden geri eklenmez.
+    #[serde(default)]
+    pub shortcuts_removed: Vec<String>,
     #[serde(default)]
     pub settings: Settings,
     /// Site başına yakınlaştırma: alan adı → oran.
@@ -181,6 +202,12 @@ pub struct AppState {
     /// Son güncelleme denetimi (Unix saniyesi).
     #[serde(default)]
     pub update_checked: u64,
+    /// Başlangıç sayfası kartlarının son verisi (açılışta hemen gösterilir).
+    #[serde(default)]
+    pub widgets: crate::widgets::Cache,
+    /// Gizlilik raporu: (gün = Unix saniyesi / 86400, engellenen istek), son 7 gün.
+    #[serde(default)]
+    pub privacy_days: Vec<(u64, u64)>,
     #[serde(default)]
     #[serde(serialize_with = "public_downloads")]
     pub download_list: Vec<DownloadRecord>,

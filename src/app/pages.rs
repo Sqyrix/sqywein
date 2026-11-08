@@ -23,9 +23,18 @@ fn shell_open(target: &str, args: Option<&str>) {
 impl App {
     pub(super) fn on_web_message(&mut self, tab_id: u32, json: &str) {
         let Ok(msg) = serde_json::from_str::<Value>(json) else { return };
+        if msg["type"].as_str().is_some_and(|s| s.starts_with("overlay.")) { self.surface_message(tab_id, &msg); return; }
         let kind = msg["type"].as_str().unwrap_or("").to_string();
         let s = |k: &str| msg[k].as_str().unwrap_or("").to_string();
         let reply = match kind.as_str() {
+            "browser.action" => {
+                match msg["action"].as_str().unwrap_or("") {
+                    "spotlight" => self.open_surface(super::overlay::Surface::Spotlight),
+                    "tabs" => self.open_surface(super::overlay::Surface::Tabs),
+                    _ => {},
+                }
+                None
+            }
             "open" => {
                 let target = s("url");
                 if let Some(u) = url::to_url_with(&target, self.state.settings.search_url()) {
@@ -119,6 +128,7 @@ impl App {
                 Some(self.bookmarks_json())
             }
             // İndirmeler
+            "downloads.preview" => { if let Some(id) = msg["id"].as_u64().and_then(|id| u32::try_from(id).ok()) { self.open_surface(super::overlay::Surface::Download(id)); } None }
             "downloads.list" => Some(self.downloads_json()),
             "downloads.open" | "downloads.show" | "downloads.cancel" | "downloads.pause" | "downloads.resume" | "downloads.remove" => {
                 let id = msg["id"].as_u64().unwrap_or(0) as u32;
@@ -228,7 +238,7 @@ impl App {
             }
             _ => None,
         };
-        if let (Some(reply), Some(view)) = (reply, self.index_of(tab_id).and_then(|i| self.tabs[i].view.clone())) {
+        if let (Some(reply), Some(view)) = (reply, (if tab_id == POPUP_VIEW { self.surface_view() } else { self.index_of(tab_id).and_then(|i| self.tabs[i].view.clone()) })) {
             engine::post_json(&view, &reply.to_string());
         }
     }
@@ -272,6 +282,8 @@ impl App {
             "type": "settings.get",
             "settings": self.state.settings,
             "defaultBrowser": crate::integration::is_default_browser(),
+            "translationLanguages": super::translate::LANGUAGES,
+            "systemLanguage": super::translate::system_language(),
             "motion": motion_enabled(),
             "profiles": self.profiles_json(),
             "about": { "version": env!("CARGO_PKG_VERSION"), "engine": format!("WebView2 {engine}") },
@@ -285,6 +297,19 @@ impl App {
         let b = value.as_bool().unwrap_or(false);
         let text = value.as_str().unwrap_or("").to_string();
         match key {
+            "translationAuto" => st.translation_auto = b,
+            "showWidgets" => { st.show_widgets = b; self.invalidate(); }
+            "weatherCity" => { st.weather_city = text.chars().take(80).collect(); self.state.widgets.location = None; self.state.widgets.weather = None; self.weather = None; self.weather_retry = 0; self.refresh_widgets(); }
+            "translationTarget" => {
+                if !text.is_empty() && super::translate::normalize_language(&text) == "auto" { return; }
+                self.set_translation_target(text); return;
+            }
+            "translationAlways" | "translationNever" => {
+                let values: Vec<String> = text.split(',').map(str::trim).map(super::translate::normalize_language).filter(|s| s != "auto").take(200).collect();
+                if key == "translationAlways" { st.translation_never.retain(|s| !values.contains(s)); st.translation_always = values; }
+                else { st.translation_always.retain(|s| !values.contains(s)); st.translation_never = values; }
+            }
+            "translationSites" => st.translation_sites = text.split(',').map(str::trim).filter(|s| !s.is_empty()).map(|s| url::host(s).to_ascii_lowercase()).take(200).collect(),
             "neverSleep" => st.never_sleep = text.split(',').map(str::trim).filter(|s| !s.is_empty()).map(|s| url::host(s).to_ascii_lowercase()).take(200).collect(),
             "downloadFolder" => {
                 if !text.is_empty() && !std::path::Path::new(&text).is_dir() { return; }
@@ -368,6 +393,7 @@ impl App {
             }
             _ => return,
         }
+        if key.starts_with("translation") { self.apply_translation_rules(); }
         self.dirty = true;
         self.invalidate();
     }

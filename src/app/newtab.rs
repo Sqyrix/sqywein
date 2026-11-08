@@ -5,7 +5,6 @@ use super::*;
 
 pub(super) const BAR_H: f32 = 30.0;
 pub(super) const DIALOG_CLASS: PCWSTR = w!("SqyweinDialog");
-const TILE_W: f32 = 104.0;
 const TILE_H: f32 = 100.0;
 const MAX_TILES: usize = 10;
 const DIALOG_W: f32 = 380.0;
@@ -21,7 +20,29 @@ pub(super) struct StartLayout {
     pub search: Rect,
     pub tiles: Vec<Rect>,
     pub add: Option<Rect>,
+    /// Favoriler başlığı; altta hava durumu ve döviz.
+    pub favorites_title: Rect,
+    pub weather: Option<Rect>,
+    pub rates: Option<Rect>,
 }
+
+impl StartLayout {
+    fn shifted(self, dy: f32) -> Self {
+        let m = |r: Rect| Rect::new(r.x, r.y + dy, r.w, r.h);
+        StartLayout {
+            logo: m(self.logo), title: m(self.title), search: m(self.search),
+            tiles: self.tiles.into_iter().map(m).collect(), add: self.add.map(m),
+            favorites_title: m(self.favorites_title), weather: self.weather.map(m), rates: self.rates.map(m),
+        }
+    }
+}
+
+/// Bir site favorilere kendiliğinden eklenmeden önce en az kaç kez ziyaret edilmeli.
+const FAVORITE_VISITS: i64 = 10;
+const SECTION_W: f32 = 720.0;
+const TILE_COLS: usize = 6;
+/// Yan yana iki karemsi kart.
+const CARD_H: f32 = 290.0;
 
 /// Kısayol ekleme penceresi: iki metin kutusu ve iki düğme.
 pub(super) struct Dialog {
@@ -57,7 +78,7 @@ impl App {
     // ---------- Yer işaretleri çubuğu ----------
 
     pub(super) fn bar_visible(&self) -> bool {
-        self.full_screen.is_none() && self.state.settings.show_bookmarks_bar && !self.state.favorites.is_empty()
+        !self.chrome_hidden() && self.state.settings.show_bookmarks_bar && !self.state.favorites.is_empty()
     }
 
     fn bar_label(b: &state::Bookmark) -> String {
@@ -133,74 +154,144 @@ impl App {
 
     // ---------- Ana sayfa ----------
 
-    pub(super) fn start_layout(&self, content: Rect) -> StartLayout {
-        let n = self.state.shortcuts.len();
-        let count = n.min(MAX_TILES) + usize::from(n < MAX_TILES);
-        let cols = count.clamp(1, 5);
-        let rows = count.div_ceil(5);
-        let block = 72.0 + 6.0 + 40.0 + 34.0 + 54.0 + 30.0 + rows as f32 * TILE_H;
-        let top = (content.cy() - block / 2.0).max(content.y + 24.0);
-        let cx = content.cx();
-        let logo = Rect::new(cx - 36.0, top, 72.0, 72.0);
-        let title = Rect::new(content.x, logo.bottom() + 6.0, content.w, 40.0);
-        let search_w = (content.w - 64.0).clamp(120.0, 600.0);
-        let search = Rect::new(cx - search_w / 2.0, title.bottom() + 34.0, search_w, 54.0);
-        let mut tiles = Vec::new();
-        let y0 = search.bottom() + 30.0;
-        for k in 0..count {
-            let (row, col) = (k / 5, k % 5);
-            let in_row = if row + 1 == rows { count - row * 5 } else { 5 };
-            let x0 = cx - in_row as f32 * TILE_W / 2.0;
-            tiles.push(Rect::new(x0 + col as f32 * TILE_W, y0 + row as f32 * TILE_H, TILE_W, TILE_H));
+    /// Sık ziyaret edilen siteler (favorilerde olmayanlar), en çok ziyaretten aza.
+    /// Sık ziyaret edilen siteler: ziyaretler siteye göre toplanır; en az
+    /// `FAVORITE_VISITS` kez girilmiş, favorilerde olmayan ve silinmemiş olanlar.
+    pub(super) fn frequent_sites(&self) -> Vec<(String, String)> {
+        let mut skip: Vec<String> = self.state.shortcuts.iter().map(|b| url::host(&b.url).trim_start_matches("www.").to_string()).collect();
+        skip.extend(self.state.shortcuts_removed.iter().cloned());
+        let mut totals: Vec<(String, String, i64)> = Vec::new();
+        for e in self.history.recent("", 5000) {
+            if !e.url.starts_with("http") { continue; }
+            let raw = url::host(&e.url);
+            let host = raw.trim_start_matches("www.").to_string();
+            if host.is_empty() || skip.contains(&host) { continue; }
+            match totals.iter_mut().find(|(h, _, _)| *h == host) {
+                Some(t) => t.2 += i64::from(e.visits.max(1)),
+                None => totals.push((host, format!("https://{raw}/"), i64::from(e.visits.max(1)))),
+            }
         }
+        totals.retain(|t| t.2 >= FAVORITE_VISITS);
+        totals.sort_by_key(|t| std::cmp::Reverse(t.2));
+        totals.into_iter().take(MAX_TILES).map(|(h, u, _)| (h, u)).collect()
+    }
+
+    /// Sık ziyaret edilen siteler favorilere kendiliğinden kaydedilir (boş yer kadar).
+    pub(super) fn auto_favorites(&mut self) {
+        if self.tabs.get(self.active).is_some_and(|t| t.private) { return; }
+        let room = MAX_TILES.saturating_sub(self.state.shortcuts.len());
+        if room == 0 { return; }
+        let add: Vec<(String, String)> = self.frequent_sites().into_iter().take(room).collect();
+        if add.is_empty() { return; }
+        for (host, u) in add {
+            self.state.shortcuts.push(state::Bookmark { title: host, url: u });
+        }
+        self.dirty = true;
+        self.invalidate();
+    }
+
+    /// Engelleyicinin sayacını günlük kayda ekler (ara ara çağrılır).
+    pub(super) fn fold_privacy_stats(&mut self) {
+        let n = crate::adblock::take_total();
+        if n == 0 { return; }
+        let today = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() / 86400);
+        let days = &mut self.state.privacy_days;
+        match days.iter_mut().find(|(d, _)| *d == today) {
+            Some((_, c)) => *c += n,
+            None => days.push((today, n)),
+        }
+        days.retain(|(d, _)| today.saturating_sub(*d) < 7);
+        self.dirty = true;
+    }
+
+    // ---------- Ana sayfa (Safari tarzı) ----------
+
+    pub(super) fn start_layout(&self, content: Rect) -> StartLayout {
+        let private = self.tabs.get(self.active).is_some_and(|t| t.private);
+        let cx = content.cx();
+        let w = (content.w - 64.0).clamp(240.0, SECTION_W);
+        let x0 = cx - w / 2.0;
+        if private {
+            // Gizli sekme: sade, ortalanmış.
+            let top = (content.cy() - 150.0).max(content.y + 24.0);
+            let logo = Rect::new(cx - 36.0, top, 72.0, 72.0);
+            let title = Rect::new(content.x, logo.bottom() + 6.0, content.w, 40.0);
+            let search_w = (content.w - 64.0).clamp(120.0, 600.0);
+            let search = Rect::new(cx - search_w / 2.0, title.bottom() + 34.0, search_w, 54.0);
+            return StartLayout { logo, title, search, tiles: vec![], add: None, favorites_title: Rect::new(0.0, 0.0, 0.0, 0.0), weather: None, rates: None };
+        }
+        let mut y = content.y + 24.0;
+        let logo = Rect::new(cx - 26.0, y, 52.0, 52.0);
+        let title = Rect::new(content.x, logo.bottom() + 2.0, content.w, 0.0);
+        y = logo.bottom() + 18.0;
+        let search = Rect::new(x0, y, w, 46.0);
+        y = search.bottom() + 30.0;
+
+        // Favoriler: eşit aralıklı kare kutucuklar.
+        let tile_w = w / TILE_COLS as f32;
+        let grid = |start_y: f32, count: usize| -> Vec<Rect> {
+            (0..count).map(|k| Rect::new(x0 + (k % TILE_COLS) as f32 * tile_w, start_y + (k / TILE_COLS) as f32 * TILE_H, tile_w, TILE_H)).collect()
+        };
+        let favorites_title = Rect::new(x0, y, w, 22.0);
+        y += 28.0;
+        let n = self.state.shortcuts.len().min(MAX_TILES);
+        let count = n + usize::from(n < MAX_TILES);
+        let mut tiles = grid(y, count);
         let add = (n < MAX_TILES).then(|| tiles.pop()).flatten();
-        let _ = cols;
-        StartLayout { logo, title, search, tiles, add }
+        y += count.div_ceil(TILE_COLS) as f32 * TILE_H + 18.0;
+        let room = |y: f32, h: f32| y + h <= content.bottom() - 16.0;
+
+        // Altta yan yana iki karemsi cam kart: hava durumu ve döviz.
+        let (weather, rates) = if self.state.settings.show_widgets && room(y, CARD_H) {
+            let gap = 16.0;
+            let cw = (w - gap) / 2.0;
+            (Some(Rect::new(x0, y, cw, CARD_H)), Some(Rect::new(x0 + cw + gap, y, cw, CARD_H)))
+        } else { (None, None) };
+
+        let layout = StartLayout { logo, title, search, tiles, add, favorites_title, weather, rates };
+        // Blok dikeyde ortalanır (biraz yukarıda, göz hizasında); sığmıyorsa üstten başlar.
+        let bottom = layout.rates.or(layout.weather).map(|r| r.bottom())
+            .or_else(|| layout.tiles.last().map(|r| r.bottom()))
+            .or(layout.add.map(|r| r.bottom()))
+            .unwrap_or(search.bottom());
+        let free = content.bottom() - bottom - 24.0;
+        if free > 0.0 { layout.shifted(free * 0.42) } else { layout }
+    }
+
+    fn section_title(&self, r: Rect, text: &str) {
+        self.gfx.text(text, r, Font::UiBold, ink(), Align::Left);
     }
 
     pub(super) fn paint_start(&self, l: &Layout) {
         let g = &self.gfx;
         let private = self.tabs[self.active].private;
         let s = self.start_layout(l.content);
-        // Zemin camdır (paint_content buzlu katmanı çizer).
-        g.glow(l.content.cx(), s.logo.cy() + 20.0, 280.0, 120.0, accent(), if private { 0.16 } else { 0.10 });
-        // Sekmeler uyurken kedi de uyur: Sqywein'in hafifliğinin görünür hali.
-        match (&self.sleeping_mascot, &self.logo) {
-            (Some(cat), _) if self.asleep_count > 0 && !private => {
-                let h = 70.0;
-                let w = h * cat.width as f32 / cat.height as f32;
-                let r = Rect::new(s.logo.cx() - w / 2.0, s.logo.bottom() - h, w, h);
-                g.image(cat, r, false);
-                for (k, (dx, dy, size)) in [(0.66, -0.05, 10.0), (0.76, -0.22, 13.0), (0.88, -0.42, 16.0)].iter().enumerate() {
-                    let z = Rect::new(r.x + r.w * dx, r.y + r.h * dy, 24.0, 24.0);
-                    let _ = k;
-                    g.text("z", z, if *size > 12.0 { Font::UiBold } else { Font::Small }, accent(), Align::Left);
-                }
-            }
-            (_, Some(img)) => g.image(img, s.logo, false),
-            _ => g.circle(s.logo.cx(), s.logo.cy(), 30.0, accent()),
-        }
-        g.text(if private { "Gizli sekme" } else { "Sqywein" }, s.title, Font::Big, ink(), Align::Center);
-        if !private && !self.ram_line.is_empty() {
-            // Hafiflik görünür olsun: şu anki bellek ve uyuyan sekmeler.
-            g.text(&self.ram_line, Rect::new(l.content.x, s.title.bottom() + 2.0, l.content.w, 18.0), Font::Small, faint(), Align::Center);
-        }
-
         let r = s.search;
         let focused = unsafe { GetFocus() } == self.start_edit;
-        if focused {
-            // Odaktayken vurgu renginde yumuşak bir hale.
-            g.round_outline_alpha(r.inset(-5.0, -5.0), 31.0, accent(), 5.0, 0.07);
-            g.round_outline_alpha(r.inset(-2.5, -2.5), 29.0, accent(), 3.0, 0.14);
+        let radius = r.h / 2.0;
+
+        if private {
+            g.glow(l.content.cx(), s.logo.cy() + 20.0, 280.0, 120.0, accent(), 0.16);
+            if let Some(img) = &self.logo { g.image(img, s.logo, false); }
+            g.text("Gizli sekme", s.title, Font::Big, ink(), Align::Center);
+        } else if let Some(img) = &self.logo {
+            g.image(img, s.logo, false);
         }
-        g.round(r, 27.0, search());
-        g.round_outline(r, 27.0, if focused { accent() } else { line() }, if focused { 1.5 } else { 1.0 });
-        g.text(ICON_SEARCH, Rect::new(r.x + 18.0, r.y, 26.0, r.h), Font::Icon, if focused { accent() } else { muted() }, Align::Center);
+
+        if focused {
+            g.round_outline_alpha(r.inset(-4.0, -4.0), radius + 4.0, accent(), 4.0, 0.10);
+        }
+        g.round(r, radius, search());
+        g.round_outline(r, radius, if focused { accent() } else { line() }, if focused { 1.5 } else { 1.0 });
+        g.text(ICON_SEARCH, Rect::new(r.x + 14.0, r.y, 26.0, r.h), Font::Icon, if focused { accent() } else { muted() }, Align::Center);
 
         if private {
             g.text("Geçmiş ve çerezler bu sekme kapanınca silinir.", Rect::new(l.content.x, r.bottom() + 24.0, l.content.w, 20.0), Font::Small, faint(), Align::Center);
             return;
         }
+
+        // Favoriler
+        self.section_title(s.favorites_title, "Favoriler");
         for (i, (t, b)) in s.tiles.iter().zip(&self.state.shortcuts).enumerate() {
             let hovered = matches!(self.hover, Hit::Tile(h) | Hit::TileRemove(h) if h == i);
             self.paint_tile(*t, &Self::bar_label(b), self.icon_for(&b.url).as_deref(), hovered, false);
@@ -211,31 +302,151 @@ impl App {
             }
         }
         if let Some(add) = s.add {
-            self.paint_tile(add, "Kısayol ekle", None, self.hover == Hit::TileAdd, true);
+            self.paint_tile(add, "Ekle", None, self.hover == Hit::TileAdd, true);
+        }
+
+        if let Some(card) = s.weather { self.paint_weather(card); }
+        if let Some(card) = s.rates { self.paint_rates(card); }
+    }
+
+    /// Liquid Glass yüzeyi: altta gölge, üstte ışık yansıması, ince parlak kenar.
+    fn glass(&self, r: Rect, radius: f32, tint: Option<(u32, u32)>) {
+        let g = &self.gfx;
+        g.glow(r.cx(), r.bottom() - 6.0, r.w * 0.48, 22.0, 0x000000, if is_dark() { 0.40 } else { 0.14 });
+        match tint {
+            Some((top, bottom)) => g.round_gradient(r, radius, top, bottom, true),
+            None if is_dark() => g.round_gradient_alpha(r, radius, (0xFFFFFF, 0.10), (0xFFFFFF, 0.04), false),
+            None => g.round_gradient_alpha(r, radius, (0xFFFFFF, 0.75), (0xFFFFFF, 0.45), false),
+        }
+        // Üst yarıda yumuşak ışık (camın kavisi).
+        let sheen = Rect::new(r.x, r.y, r.w, r.h * 0.55);
+        g.round_gradient_alpha(sheen, radius, (0xFFFFFF, if tint.is_some() { 0.22 } else { 0.10 }), (0xFFFFFF, 0.0), false);
+        g.round_outline_alpha(r, radius, 0xFFFFFF, 1.2, if tint.is_some() || is_dark() { 0.30 } else { 0.9 });
+        g.round_outline_alpha(r.inset(1.5, 1.5), radius - 1.5, 0xFFFFFF, 1.0, 0.07);
+        if tint.is_none() && !is_dark() { g.round_outline_alpha(r, radius, 0x000000, 1.0, 0.06); }
+    }
+
+    /// Pixel / macOS tarzı hava durumu: kartın kendisi gökyüzü.
+    fn paint_weather(&self, r: Rect) {
+        use crate::widgets::{describe, sky, WeatherState};
+        let g = &self.gfx;
+        let pad = 24.0;
+        let white = 0xFFFFFF;
+        let Some(WeatherState::Ready(w)) = &self.weather else {
+            self.glass(r, 24.0, None);
+            let sub = match &self.weather {
+                Some(WeatherState::NoLocation) => "Konumun alınamadı. Tıkla, Ayarlar'dan şehrini yaz.",
+                Some(WeatherState::Failed) => "Şu an alınamadı; birazdan yeniden denenecek.",
+                _ => "Yükleniyor…",
+            };
+            g.text("🌤️", Rect::new(r.x + pad, r.cy() - 30.0, 60.0, 60.0), Font::Emoji, ink(), Align::Center);
+            g.text("Hava durumu", Rect::new(r.x + pad + 76.0, r.cy() - 22.0, r.w - 140.0, 22.0), Font::UiBold, ink(), Align::Left);
+            g.text(sub, Rect::new(r.x + pad + 76.0, r.cy(), r.w - 140.0, 20.0), Font::Small, muted(), Align::Left);
+            return;
+        };
+        self.glass(r, 24.0, Some(sky(w.code, w.day)));
+        // Havaya göre süs: güneş, yıldızlar, yağmur, kar.
+        let seed = |k: usize| ((k as f32 * 12.9898).sin() * 43758.547).fract().abs();
+        match (w.code, w.day) {
+            (0 | 1, true) => {
+                g.glow(r.right() - 84.0, r.y + 54.0, 150.0, 110.0, 0xFFE7A0, 0.55);
+                g.glow(r.right() - 84.0, r.y + 54.0, 54.0, 54.0, 0xFFF6D8, 0.6);
+            }
+            (0..=3, false) => {
+                for k in 0..34 {
+                    let (x, y) = (r.x + 18.0 + seed(k) * (r.w - 36.0), r.y + 12.0 + seed(k + 50) * (r.h * 0.5));
+                    g.circle(x, y, 0.6 + seed(k + 99) * 1.0, white);
+                }
+            }
+            (51..=67 | 80..=82 | 95..=99, _) => {
+                for k in 0..40 {
+                    let (x, y) = (r.x + seed(k) * r.w, r.y + seed(k + 40) * (r.h - 18.0));
+                    g.polyline(&[(x, y), (x - 4.0, y + 12.0)], white, 0.20, 1.4);
+                }
+            }
+            (71..=77 | 85 | 86, _) => {
+                for k in 0..44 {
+                    g.circle(r.x + seed(k) * r.w, r.y + seed(k + 70) * r.h, 1.0 + seed(k + 5) * 1.8, white);
+                }
+            }
+            _ => {}
+        }
+        let (text, emoji) = describe(w.code, w.day);
+        let place = if w.place.is_empty() { "Bulunduğun yer".to_string() } else { w.place.clone() };
+        // Üst: yer, dev sıcaklık, durum; sağda büyük simge.
+        g.text(&place, Rect::new(r.x + pad, r.y + 20.0, r.w - pad * 2.0 - 70.0, 22.0), Font::UiBold, white, Align::Left);
+        g.text(&format!("{:.0}°", w.temp), Rect::new(r.x + pad - 3.0, r.y + 40.0, 180.0, 72.0), Font::Giant, white, Align::Left);
+        g.text(emoji, Rect::new(r.right() - pad - 70.0, r.y + 16.0, 70.0, 66.0), Font::Emoji, white, Align::Center);
+        g.text(text, Rect::new(r.x + pad, r.y + 114.0, r.w - pad * 2.0, 20.0), Font::UiBold, white, Align::Left);
+        // Alt: önümüzdeki günler, dikey buzlu cam hücrelerde.
+        let n = w.days.len().max(1) as f32;
+        let gap = 6.0;
+        let cw = (r.w - pad * 2.0 - gap * (n - 1.0)) / n;
+        for (k, (day, code, hi, lo)) in w.days.iter().enumerate() {
+            let c = Rect::new(r.x + pad + k as f32 * (cw + gap), r.y + 150.0, cw, 116.0);
+            g.round_alpha(c, 14.0, white, 0.13);
+            g.round_outline_alpha(c, 14.0, white, 1.0, 0.18);
+            g.text(day, Rect::new(c.x, c.y + 8.0, c.w, 18.0), Font::Small, white, Align::Center);
+            g.text(describe(*code, true).1, Rect::new(c.x, c.y + 30.0, c.w, 28.0), Font::EmojiSmall, white, Align::Center);
+            g.text(&format!("{hi:.0}°"), Rect::new(c.x, c.y + 64.0, c.w, 20.0), Font::UiBold, white, Align::Center);
+            g.text(&format!("{lo:.0}°"), Rect::new(c.x, c.y + 86.0, c.w, 18.0), Font::Small, white, Align::Center);
+        }
+    }
+
+    /// Döviz: karemsi cam kart; her kur bir satır (rozet, değer, değişim, küçük grafik).
+    fn paint_rates(&self, r: Rect) {
+        let g = &self.gfx;
+        self.glass(r, 24.0, None);
+        let pad = 22.0;
+        g.text("Döviz", Rect::new(r.x + pad, r.y + 20.0, r.w - pad * 2.0, 22.0), Font::UiBold, ink(), Align::Left);
+        let Some(rates) = &self.rates else {
+            g.text("Kurlar yükleniyor…", r, Font::Small, muted(), Align::Center);
+            return;
+        };
+        let date = rates.date.split('-').rev().collect::<Vec<_>>().join(".");
+        g.text(&date, Rect::new(r.x + pad, r.y + 20.0, r.w - pad * 2.0, 22.0), Font::Small, faint(), Align::Right);
+        for (k, rate) in rates.items.iter().enumerate() {
+            let row = Rect::new(r.x + pad, r.y + 58.0 + k as f32 * 74.0, r.w - pad * 2.0, 66.0);
+            if k > 0 { g.fill_alpha(Rect::new(row.x, row.y - 5.0, row.w, 1.0), line(), 0.6); }
+            let (symbol, badge, name) = match rate.code.as_str() { "USD" => ("$", 0x34C759, "Dolar"), "EUR" => ("€", 0x0A84FF, "Euro"), _ => ("£", 0xAF52DE, "Sterlin") };
+            g.circle(row.x + 17.0, row.y + 22.0, 17.0, badge);
+            g.text(symbol, Rect::new(row.x, row.y + 5.0, 34.0, 34.0), Font::UiBold, 0xFFFFFF, Align::Center);
+            g.text(name, Rect::new(row.x + 44.0, row.y + 4.0, 90.0, 20.0), Font::UiBold, ink(), Align::Left);
+            let up = rate.change >= 0.0;
+            let color = if rate.change.abs() < 0.005 { faint() } else if up { 0x34C759 } else { 0xFF453A };
+            g.text(&format!("{} {:.2}%", if up { "▲" } else { "▼" }, rate.change.abs()).replace('.', ","), Rect::new(row.x + 44.0, row.y + 24.0, 90.0, 18.0), Font::Small, color, Align::Left);
+            g.text(&format!("{:.2} ₺", rate.value).replace('.', ","), Rect::new(row.right() - 100.0, row.y + 2.0, 100.0, 24.0), Font::UiBold, ink(), Align::Right);
+            let chart = Rect::new(row.right() - 100.0, row.y + 28.0, 100.0, 22.0);
+            if rate.series.len() >= 2 {
+                let (lo, hi) = rate.series.iter().fold((f64::MAX, f64::MIN), |(a, b), v| (a.min(*v), b.max(*v)));
+                let span = (hi - lo).max(1e-9);
+                let pts: Vec<(f32, f32)> = rate.series.iter().enumerate().map(|(i, v)| {
+                    (chart.x + chart.w * i as f32 / (rate.series.len() - 1) as f32, chart.bottom() - chart.h * ((v - lo) / span) as f32)
+                }).collect();
+                g.polyline(&pts, color, 0.95, 1.8);
+            }
         }
     }
 
     fn tile_remove(t: Rect) -> Rect {
-        Rect::new(t.right() - 26.0, t.y + 4.0, 20.0, 20.0)
+        Rect::new(t.cx() + 22.0, t.y - 2.0, 20.0, 20.0)
     }
 
     fn paint_tile(&self, t: Rect, label: &str, icon: Option<&Image>, hovered: bool, add: bool) {
         let g = &self.gfx;
-        if hovered {
-            g.round(t.inset(4.0, 2.0), 12.0, hover());
-        }
-        let (cx, cy) = (t.cx(), t.y + 34.0);
-        g.circle(cx, cy, 26.0, if hovered { line() } else { search() });
-        let inner = Rect::new(cx - 12.0, cy - 12.0, 24.0, 24.0);
+        let sq = Rect::new(t.cx() - 32.0, t.y + 4.0, 64.0, 64.0);
+        if is_dark() { g.round_alpha(sq, 16.0, 0xFFFFFF, if hovered { 0.16 } else { 0.08 }); } else { g.round_alpha(sq, 16.0, 0x000000, if hovered { 0.09 } else { 0.045 }); }
+        g.round_outline_alpha(sq, 16.0, line(), 1.0, if hovered { 0.9 } else { 0.5 });
+        let inner = sq.centered(30.0, 30.0);
         if add {
-            g.text(ICON_ADD, inner, Font::Icon, ink(), Align::Center);
+            g.text(ICON_ADD, inner, Font::Icon, muted(), Align::Center);
         } else {
             match icon {
                 Some(img) => g.image(img, inner, false),
                 None => menu::avatar(g, inner, None, accent(), label),
             }
         }
-        g.text(label, Rect::new(t.x + 8.0, t.y + 66.0, t.w - 16.0, 20.0), Font::Small, ink(), Align::Center);
+        g.text(label, Rect::new(t.x + 4.0, sq.bottom() + 6.0, t.w - 8.0, 18.0), Font::Small, if hovered { ink() } else { muted() }, Align::Center);
     }
 
     /// Ana sayfadaki bir noktanın karşılığı.
@@ -255,6 +466,9 @@ impl App {
         if s.add.is_some_and(|a| a.inset(4.0, 2.0).contains(x, y)) {
             return Hit::TileAdd;
         }
+        if s.weather.is_some_and(|r| r.contains(x, y)) && matches!(self.weather, Some(crate::widgets::WeatherState::NoLocation)) {
+            return Hit::Weather;
+        }
         Hit::None
     }
 
@@ -269,7 +483,12 @@ impl App {
 
     pub(super) fn remove_shortcut(&mut self, i: usize) {
         if i < self.state.shortcuts.len() {
-            self.state.shortcuts.remove(i);
+            let removed = self.state.shortcuts.remove(i);
+            let host = url::host(&removed.url).trim_start_matches("www.").to_string();
+            if !host.is_empty() && !self.state.shortcuts_removed.contains(&host) {
+                self.state.shortcuts_removed.push(host);
+                if self.state.shortcuts_removed.len() > 200 { self.state.shortcuts_removed.remove(0); }
+            }
             self.dirty = true;
             self.hover = Hit::None;
             self.layout_children();

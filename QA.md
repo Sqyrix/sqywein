@@ -105,3 +105,20 @@ Kaynak testi ayrı profil ve `SQYWEIN_LOG` kullanır. `PLAYWRIGHT_MODULE` ayarla
 İki tam kaynak koşusu başarılı: `resources-1794058402373` (debug) ve `resources-1794058602611` (release). Release koşusunda döngüler sonrası kabuk 10,7/10,8/10,9 MB; tüm süreç toplamı 93,1/95,2/102,9 MB idi. Motor önbellekleri nedeniyle toplamın sabit kalması beklenmez. 10 ve 30 yerel sekme için 167,4 ve 275 MB kaydedildi; bunlar basit aynı-origin fixture değerleridir, genel web performansı iddiası değildir.
 
 Geliştirme sırasında iki koşu kontrol hedefinin kapanmasıyla kesildi; kesin neden belirlenmedi ve son iki tam koşuda yeniden görülmedi. Sonraki tanı için yalnızca `SQYWEIN_LOG` açıkken panic, pencere kapatma ve bellek modu geçiş kayıtları eklendi. Bunlar normal kullanımda diske yazılmaz. Kaynak testinin sonundaki süreç sonlandırması yalnızca kendi oluşturduğu test uygulamasına uygulanır.
+
+
+## 8 Kasım 2026 — macOS araçları, çeviri paneli ve yeni logo
+
+- Kaynak/hedef dil sekmeleri, Windows görüntüleme dilini izleyen hedef, dil/site istisnaları ve kaynak dili düzeltmesi eklendi. Dahili sayfalar, düzenlenebilir taslaklar ve kod gönderilmez. İptal/gezinme sonuçları belge ve çeviri nesliyle korunur; ağ ve DOM işi sınırlıdır.
+- Ctrl+Space Hızlı erişim; Ctrl+Shift+A küçük resimli sekme ızgarası; Shift+tık bağlantı önizlemesi; indirmelerde basılı tutma/Hızlı Bakış; resim sağ tık menüsünde yerel Windows OCR eklendi.
+- PiP gerçek kullanıcı hareketiyle başlatılır; başarı/hata beklenir. Yerel video akışında açma ve sayfaya dönme gerçek WebView2 üzerinde doğrulandı.
+- Paneller kapanınca WebView'ları kapatılır. Küçük resimler sırayla ve 400 piksel sınırıyla alınır; gizli denetleyicilerde CapturePreview beklemesi yerine CDP yakalaması kullanılır. Yakalama için uyuyan sekmeler uyandırılmaz. Dosya okuma ve resim çözme arayüz dışındadır; iptal edilen önizleme sonuçları uygulanmaz.
+- Kullanıcının verdiği mavi yörünge PNG'si `Assets/logo-source.png` olarak birebir korundu. Başlangıç/README PNG'leri ve 16–256 piksel arasında dokuz boyutlu Windows ICO üretildi. Build betiği ICO değişikliklerini izler. `scripts/prepare-icons.py` yalnızca geliştirme zamanı dönüştürücüsüdür; çalışma zamanına bağımlılık eklemez.
+
+Bu turda standart Rust testleri **54 başarılı / 7 atlanan**, Clippy bütün hedeflerde `-D warnings` ile başarılıdır. Ortama bağlı gerçek Windows OCR görüntü testi ve sabit metinli canlı Google çeviri testi ayrıca çalıştırıldı ve geçti. İç sayfalar **201**, güvenlik/uyutma betikleri **28**, yeni araçlar gerçek native uygulamada **25** kontrolü geçti. Kaynak testi **90 görünüm çevrimi + 30 sekmede 16** kontrolü geçti; yerel hafif test sayfaları Chrome/Edge performans karşılaştırması değildir.
+
+Native araç testi: `node ui/test-extras.cjs`. `SQYWEIN_TEST_EXE` ile exe yolu verilebilir. Detaylı kullanım ve sınırlar [UTILITIES.md](UTILITIES.md) içindedir.
+
+Windows Computer Use istemcisi test penceresini yeniden bağlarken aynı uygulama kimliği için sahiplik hatası verdi; bu araçla native menünün son görsel denetimi tamamlanamadı. WebView panelleri CDP üzerinden görüntülendi ve sınandı; gerçek kullanıcı hesabında Google/Claude girişi denenmedi.
+
+Optimize release derlemesinde ayrıca 29 native uygulama ve 14 Windows/yönlendirme kontrolü başarılı oldu. Yeni panel testleri animasyonları kapatma tercihini de doğrular.

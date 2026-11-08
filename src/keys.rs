@@ -16,6 +16,11 @@ pub fn modifiers() -> Mods {
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Cmd {
+    SwitchMode,
+    Spotlight,
+    Overview,
+    Translate,
+    Focus,
     NewTab,
     CloseTab,
     ReopenTab,
@@ -54,7 +59,12 @@ pub fn command(vk: u32, m: Mods, in_address: bool) -> Option<Cmd> {
     Some(match (m.ctrl, m.shift, m.alt, key, vk) {
         (_, _, _, _, VK_RETURN) if in_address => Cmd::Go,
         (_, _, _, _, VK_ESCAPE) if in_address => Cmd::Cancel,
+        (true, false, false, _, 0x20) => Cmd::Spotlight,
+        (true, true, false, Some('A'), _) => Cmd::Overview,
         (true, true, false, Some('T'), _) => Cmd::ReopenTab,
+        (true, true, false, Some('Y'), _) => Cmd::Translate,
+        (true, true, false, Some('F'), _) => Cmd::Focus,
+        (true, true, false, Some('P'), _) => Cmd::SwitchMode,
         (true, true, false, Some('N'), _) => Cmd::PrivateTab,
         (true, true, false, Some('O'), _) => Cmd::Bookmarks,
         (true, false, false, Some('D'), _) => Cmd::Bookmark,

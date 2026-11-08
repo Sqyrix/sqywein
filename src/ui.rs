@@ -12,6 +12,7 @@ macro_rules! files {
 }
 
 files! {
+    "overlay.html" => "text/html",
     "app.css" => "text/css",
     "app.js" => "text/javascript",
     "history.html" => "text/html",

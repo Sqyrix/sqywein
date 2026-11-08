@@ -5,6 +5,8 @@ mod adblock;
 mod app;
 mod cache;
 mod engine;
+mod ocr;
+mod widgets;
 mod gfx;
 mod hello;
 mod history;

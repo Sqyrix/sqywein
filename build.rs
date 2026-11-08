@@ -6,5 +6,6 @@ fn main() {
         .manifest_required()
         .unwrap();
     println!("cargo:rerun-if-changed=sqywein.rc");
+    println!("cargo:rerun-if-changed=Assets/app.ico");
     println!("cargo:rerun-if-changed=sqywein.manifest");
 }

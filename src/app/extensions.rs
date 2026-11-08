@@ -21,6 +21,15 @@ use windows::Win32::{
 pub const POPUP_CLASS: PCWSTR = w!("SqyweinPopup");
 const POPUP_W: f32 = 380.0;
 const POPUP_H: f32 = 520.0;
+pub(super) const TIMER_EXPAND: usize = 9;
+
+/// Önizlemenin sekmeye büyüme animasyonu (ekran pikseli).
+pub(super) struct Expand {
+    start: Instant,
+    from: RECT,
+    to: RECT,
+    tab: u32,
+}
 
 /// Ağdan dosya indirir (arka plan iş parçacığında çağrılır).
 pub fn download_file(url: &str, path: &Path) -> bool {
@@ -419,7 +428,7 @@ impl App {
             let _ = DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &corner as *const _ as _, 4);
         }
         let url = format!("chrome-extension://{id}/{}", page.trim_start_matches('/'));
-        self.popup = Some(Popup { hwnd, ctrl: None, url });
+        self.popup = Some(Popup { hwnd, ctrl: None, url, gfx: None, glass: false });
         if let Some(env) = self.env.clone() {
             let _ = engine::create_view(&env, hwnd, POPUP_VIEW, &self.engine_profile(), false);
         }
@@ -432,14 +441,27 @@ impl App {
             unsafe { let _ = ctrl.Close(); }
             return;
         };
-        let Ok(view) = engine::configure(&ctrl, POPUP_VIEW, raised(), &self.state.settings) else { return };
+        let mut parent = HWND::default();
+        unsafe { let _ = ctrl.ParentWindow(&mut parent); }
+        if parent != popup.hwnd { unsafe { let _ = ctrl.Close(); } return; }
+        let preview = matches!(self.surface, Some(super::overlay::Surface::Link(_) | super::overlay::Surface::File(_)));
+        let configured = if preview { engine::configure_preview(&ctrl, POPUP_VIEW, raised(), &self.state.settings, &popup.url) } else { engine::configure(&ctrl, POPUP_VIEW, raised(), &self.state.settings) };
+        let Ok(view) = configured else { return };
+        if self.surface.is_some() && !preview {
+            if popup.glass {
+                if let Ok(c2) = ctrl.cast::<ICoreWebView2Controller2>() { unsafe { let _ = c2.SetDefaultBackgroundColor(COREWEBVIEW2_COLOR { A: 0, R: 0, G: 0, B: 0 }); } }
+            }
+            let setup = format!("window.__sqGlass={};window.__sqMotion={};", popup.glass, motion_enabled());
+            unsafe { let _ = view.AddScriptToExecuteOnDocumentCreated(&HSTRING::from(setup), &webview2_com::AddScriptToExecuteOnDocumentCreatedCompletedHandler::create(Box::new(|_, _| Ok(())))); }
+        }
         let mut rc = RECT::default();
         unsafe {
             let _ = GetClientRect(popup.hwnd, &mut rc);
+            if preview { rc.top = (48.0 * self.dpi as f32 / 96.0) as i32; }
             let _ = ctrl.SetBounds(rc);
             let _ = ctrl.SetIsVisible(true);
             let _ = view.Navigate(&wide(&popup.url));
-            let _ = ctrl.MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
+            if IsWindowVisible(popup.hwnd).as_bool() { let _ = ctrl.MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC); }
         }
         popup.ctrl = Some(ctrl);
     }
@@ -455,7 +477,70 @@ impl App {
         self.retired_auth = keep;
     }
 
+    /// "Sekmede aç": sayfa arkada yeni sekmede yüklenirken önizleme penceresi
+    /// sekmenin içerik alanına doğru büyür; sekme hazır olunca sessizce kapanır.
+    pub(super) fn expand_preview(&mut self, target: String) {
+        let Some(hwnd) = self.popup.as_ref().map(|p| p.hwnd) else { return };
+        let mut from = RECT::default();
+        unsafe { let _ = GetWindowRect(hwnd, &mut from); }
+        let l = self.layout();
+        let c = self.px(l.content);
+        let (mut tl, mut br) = (POINT { x: c.left, y: c.top }, POINT { x: c.right, y: c.bottom });
+        unsafe { let _ = ClientToScreen(self.hwnd, &mut tl); let _ = ClientToScreen(self.hwnd, &mut br); }
+        // Başlık şeridi sekme şeridinin üstüne oturur; sayfa tam içerik alanına denk gelir.
+        let header = (48.0 * self.scale()) as i32;
+        let to = RECT { left: tl.x, top: tl.y - header, right: br.x, bottom: br.y };
+        self.new_tab(target, None);
+        let tab = self.tabs[self.active].id;
+        if !motion_enabled() {
+            self.close_popup();
+            self.focus_content();
+            return;
+        }
+        self.expand = Some(Expand { start: Instant::now(), from, to, tab });
+        unsafe {
+            let _ = windows::Win32::Media::timeBeginPeriod(1);
+            SetTimer(Some(self.hwnd), TIMER_EXPAND, 8, None);
+        }
+    }
+
+    pub(super) fn expand_tick(&mut self) {
+        let Some(e) = &self.expand else { unsafe { let _ = KillTimer(Some(self.hwnd), TIMER_EXPAND); } return };
+        let elapsed = e.start.elapsed().as_secs_f32();
+        let t = (elapsed / 0.26).min(1.0);
+        // Yumuşak başlayıp yumuşak biten geçiş.
+        let k = if t < 0.5 { 4.0 * t * t * t } else { 1.0 - (-2.0 * t + 2.0).powi(3) / 2.0 };
+        let lerp = |a: i32, b: i32| a + ((b - a) as f32 * k).round() as i32;
+        let r = RECT { left: lerp(e.from.left, e.to.left), top: lerp(e.from.top, e.to.top), right: lerp(e.from.right, e.to.right), bottom: lerp(e.from.bottom, e.to.bottom) };
+        let (tab, done) = (e.tab, t >= 1.0);
+        if let Some(popup) = &self.popup {
+            unsafe {
+                let _ = SetWindowPos(popup.hwnd, None, r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_NOZORDER | SWP_NOACTIVATE);
+                if let Some(ctrl) = &popup.ctrl {
+                    let header = (48.0 * self.scale()) as i32;
+                    let _ = ctrl.SetBounds(RECT { left: 0, top: header, right: r.right - r.left, bottom: r.bottom - r.top });
+                }
+                let _ = InvalidateRect(Some(popup.hwnd), None, false);
+            }
+        }
+        // Büyüme bitince arkadaki sekme yüklenmişse (en geç 1,2 sn) önizleme kalkar.
+        let ready = self.index_of(tab).is_none_or(|i| self.tabs[i].has_loaded && !self.tabs[i].loading);
+        if done && (ready || elapsed > 1.2) {
+            self.expand = None;
+            unsafe {
+                let _ = KillTimer(Some(self.hwnd), TIMER_EXPAND);
+                let _ = windows::Win32::Media::timeEndPeriod(1);
+            }
+            self.close_popup();
+            self.focus_content();
+        }
+    }
+
     pub(super) fn close_popup(&mut self) {
+        if let Some(cancel) = self.preview_cancel.take() { cancel.store(true, std::sync::atomic::Ordering::Relaxed); }
+        unsafe { let _ = KillTimer(Some(self.hwnd), super::overlay::TIMER_THUMBNAIL); }
+        self.thumbnail_queue.clear(); self.thumbnail_inflight = None;
+        self.surface = None; self.overlay_generation = self.overlay_generation.wrapping_add(1);
         if let Some(p) = self.popup.take() {
             if let Some(c) = p.ctrl {
                 unsafe { let _ = c.Close(); }
@@ -465,11 +550,46 @@ impl App {
         }
     }
 
-    pub(super) fn popup_message(&mut self, hwnd: HWND, msg: u32, wparam: WPARAM, _lparam: LPARAM) -> Option<LRESULT> {
+    pub(super) fn popup_message(&mut self, hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
         if self.popup.as_ref().map(|p| p.hwnd) != Some(hwnd) {
             return None;
         }
+        if matches!(self.surface, Some(super::overlay::Surface::Link(_) | super::overlay::Surface::File(_))) {
+            match msg {
+                WM_LBUTTONUP => {
+                    let scale = self.scale();
+                    let x = (lparam.0 & 0xffff) as i16 as f32 / scale;
+                    let y = ((lparam.0 >> 16) & 0xffff) as i16 as f32 / scale;
+                    let mut rc = RECT::default(); unsafe { let _ = GetClientRect(hwnd, &mut rc); }
+                    let width = rc.right as f32 / scale;
+                    if y < 48.0 && x > width - 46.0 { self.close_popup(); self.focus_content(); }
+                    else if y < 48.0 && x > width - 175.0 {
+                        let target = match &self.surface { Some(super::overlay::Surface::Link(target) | super::overlay::Surface::File(target)) => Some(target.clone()), _ => None };
+                        if let Some(target) = target { self.expand_preview(target); }
+                    }
+                    return Some(LRESULT(0));
+                }
+                WM_PAINT => {
+                    let mut ps = PAINTSTRUCT::default(); let mut rc = RECT::default();
+                    unsafe { BeginPaint(hwnd, &mut ps); let _ = GetClientRect(hwnd, &mut rc); }
+                    if let Some(popup) = &mut self.popup {
+                        if let Some(g) = &mut popup.gfx {
+                            if g.begin(hwnd, rc.right as u32, rc.bottom as u32) {
+                                let width = rc.right as f32 * 96.0 / self.dpi as f32;
+                                g.clear(raised());
+                                g.text(&if popup.url.starts_with("file://") { "PDF önizlemesi".to_string() } else { format!("Önizleme · {}", url::host(&popup.url)) }, Rect::new(16.0, 0.0, (width - 195.0).max(10.0), 48.0), Font::Ui, ink(), Align::Left);
+                                g.text("Sekmede aç", Rect::new(width - 175.0, 0.0, 129.0, 48.0), Font::UiBold, accent(), Align::Center);
+                                g.text(ICON_CLOSE, Rect::new(width - 46.0, 0.0, 40.0, 48.0), Font::SmallIcon, ink(), Align::Center); g.end();
+                            }
+                        }
+                    }
+                    unsafe { let _ = EndPaint(hwnd, &ps); } return Some(LRESULT(0));
+                }
+                _ => {},
+            }
+        }
         match msg {
+            WM_ACTIVATE if (wparam.0 & 0xFFFF) as u32 == WA_INACTIVE && self.expand.is_some() => Some(LRESULT(0)),
             WM_ACTIVATE if (wparam.0 & 0xFFFF) as u32 == WA_INACTIVE => {
                 self.close_popup();
                 Some(LRESULT(0))
@@ -482,9 +602,11 @@ impl App {
                 let mut ps = PAINTSTRUCT::default();
                 unsafe {
                     let hdc = BeginPaint(hwnd, &mut ps);
-                    let brush = CreateSolidBrush(COLORREF(colorref(raised())));
-                    FillRect(hdc, &ps.rcPaint, brush);
-                    let _ = DeleteObject(brush.into());
+                    if !self.popup.as_ref().is_some_and(|p| p.glass) {
+                        let brush = CreateSolidBrush(COLORREF(colorref(raised())));
+                        FillRect(hdc, &ps.rcPaint, brush);
+                        let _ = DeleteObject(brush.into());
+                    }
                     let _ = EndPaint(hwnd, &ps);
                 }
                 Some(LRESULT(0))

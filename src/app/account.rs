@@ -132,6 +132,15 @@ impl App {
             Background::Adblock(engines, fresh, done) => self.on_adblock_engine(engines, fresh, done),
             Background::Hello(request, outcome) => self.on_hello(request, outcome),
             Background::Update(outcome) => self.on_update(outcome),
+            Background::Weather(weather, location) => self.on_weather(weather, location),
+            Background::Rates(rates) => self.on_rates(rates),
+            Background::Preview(generation, preview) => self.on_preview(generation, preview),
+            Background::Ocr(id, epoch, request, result) => {
+                if self.index_of(id) == Some(self.active) && self.tabs[self.active].epoch == epoch && self.ocr_request == request {
+                    self.open_surface(match result { Ok(text) => super::overlay::Surface::Text(text), Err(error) => super::overlay::Surface::Notice(error) });
+                }
+            }
+            Background::Translated(id, epoch, items, failed) => self.on_translated(id, epoch, items, failed),
         }
     }
 

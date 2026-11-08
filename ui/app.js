@@ -181,3 +181,10 @@ if (!bridge) {
   },35);}};
   setInterval(() => {for(const item of state.downloads){if(item.status==='progress'){item.received=Math.min(item.total,item.received+1048576);if(item.received===item.total)item.status='done';reply('downloads.update',{item});}}},1500);
 }
+
+// Keep utility shortcuts available in internal pages and browser-based previews too.
+document.addEventListener('keydown',event=>{
+ if(!event.ctrlKey||event.altKey||event.metaKey)return;
+ const action=(!event.shiftKey&&event.code==='Space')?'spotlight':(event.shiftKey&&event.code==='KeyA')?'tabs':null;
+ if(action){event.preventDefault();send('browser.action',{action});}
+});

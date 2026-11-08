@@ -23,6 +23,12 @@ enum Kind {
     Tab(u32),
     /// Tarayıcı komutu (komut tablosundaki sırası).
     Command(usize),
+    /// Sık kullanılan bir site (geçmişte yoksa).
+    Site,
+}
+
+fn is_site(k: Kind) -> bool {
+    matches!(k, Kind::History | Kind::Bookmark | Kind::Site)
 }
 
 /// Adres çubuğundan çalıştırılabilen komutlar: (simge, ad, anahtar sözcükler).
@@ -38,6 +44,92 @@ const COMMANDS: [(&str, &str, &str); 10] = [
     ("\u{E735}", "Bu sayfayı yer işaretlerine ekle", "yıldız yildiz ekle kaydet bookmark"),
     ("\u{EC7A}", "Geliştirici araçları", "geliştirici gelistirici devtools konsol"),
 ];
+
+/// Geçmiş boşken de site önerebilmek için sık kullanılan siteler:
+/// (aranan sözcükler, adres). Sözcüklerden biri yazılanla başlarsa önerilir.
+const POPULAR: &[(&str, &str)] = &[
+    ("instagram insta", "https://www.instagram.com/"),
+    ("youtube yt", "https://www.youtube.com/"),
+    ("google", "https://www.google.com/"),
+    ("gmail mail", "https://mail.google.com/"),
+    ("drive", "https://drive.google.com/"),
+    ("maps harita", "https://maps.google.com/"),
+    ("translate çeviri ceviri", "https://translate.google.com/"),
+    ("x twitter", "https://x.com/"),
+    ("facebook fb", "https://www.facebook.com/"),
+    ("whatsapp wp", "https://web.whatsapp.com/"),
+    ("telegram", "https://web.telegram.org/"),
+    ("tiktok", "https://www.tiktok.com/"),
+    ("netflix", "https://www.netflix.com/"),
+    ("spotify", "https://open.spotify.com/"),
+    ("twitch", "https://www.twitch.tv/"),
+    ("discord", "https://discord.com/app"),
+    ("reddit", "https://www.reddit.com/"),
+    ("pinterest", "https://www.pinterest.com/"),
+    ("linkedin", "https://www.linkedin.com/"),
+    ("github", "https://github.com/"),
+    ("stackoverflow", "https://stackoverflow.com/"),
+    ("chatgpt openai", "https://chatgpt.com/"),
+    ("claude", "https://claude.ai/"),
+    ("gemini", "https://gemini.google.com/"),
+    ("outlook hotmail", "https://outlook.live.com/"),
+    ("office", "https://www.office.com/"),
+    ("wikipedia vikipedi", "https://tr.wikipedia.org/"),
+    ("eksisozluk ekşi eksi", "https://eksisozluk.com/"),
+    ("trendyol", "https://www.trendyol.com/"),
+    ("hepsiburada", "https://www.hepsiburada.com/"),
+    ("amazon", "https://www.amazon.com.tr/"),
+    ("n11", "https://www.n11.com/"),
+    ("sahibinden", "https://www.sahibinden.com/"),
+    ("yemeksepeti", "https://www.yemeksepeti.com/"),
+    ("getir", "https://getir.com/"),
+    ("akakce akakçe", "https://www.akakce.com/"),
+    ("cimri", "https://www.cimri.com/"),
+    ("epey", "https://www.epey.com/"),
+    ("edevlet e-devlet turkiye", "https://www.turkiye.gov.tr/"),
+    ("osym ösym", "https://www.osym.gov.tr/"),
+    ("meb", "https://www.meb.gov.tr/"),
+    ("ptt", "https://www.ptt.gov.tr/"),
+    ("hurriyet hürriyet", "https://www.hurriyet.com.tr/"),
+    ("sozcu sözcü", "https://www.sozcu.com.tr/"),
+    ("haberturk habertürk", "https://www.haberturk.com/"),
+    ("ntv", "https://www.ntv.com.tr/"),
+    ("milliyet", "https://www.milliyet.com.tr/"),
+    ("sabah", "https://www.sabah.com.tr/"),
+    ("bbc", "https://www.bbc.com/turkce"),
+    ("ziraat", "https://www.ziraatbank.com.tr/"),
+    ("garanti", "https://www.garantibbva.com.tr/"),
+    ("isbank işbank is bankasi", "https://www.isbank.com.tr/"),
+    ("yapikredi yapı kredi", "https://www.yapikredi.com.tr/"),
+    ("akbank", "https://www.akbank.com/"),
+    ("steam", "https://store.steampowered.com/"),
+    ("epic epicgames", "https://store.epicgames.com/"),
+    ("udemy", "https://www.udemy.com/"),
+    ("coursera", "https://www.coursera.org/"),
+    ("duolingo", "https://www.duolingo.com/"),
+    ("booking", "https://www.booking.com/"),
+    ("airbnb", "https://www.airbnb.com/"),
+    ("obilet", "https://www.obilet.com/"),
+    ("thy turkish türk hava", "https://www.turkishairlines.com/"),
+    ("pegasus", "https://www.flypgs.com/"),
+    ("apple", "https://www.apple.com/tr/"),
+    ("microsoft", "https://www.microsoft.com/tr-tr"),
+    ("canva", "https://www.canva.com/"),
+    ("figma", "https://www.figma.com/"),
+    ("notion", "https://www.notion.so/"),
+    ("dropbox", "https://www.dropbox.com/"),
+    ("icloud", "https://www.icloud.com/"),
+    ("yandex", "https://yandex.com.tr/"),
+    ("bing", "https://www.bing.com/"),
+    ("duckduckgo", "https://duckduckgo.com/"),
+    ("imdb", "https://www.imdb.com/"),
+    ("letterboxd", "https://letterboxd.com/"),
+    ("disney", "https://www.disneyplus.com/"),
+    ("exxen", "https://www.exxen.com/"),
+    ("blutv", "https://www.blutv.com/"),
+    ("kick", "https://kick.com/"),
+];
+const MAX_SITES: usize = 3;
 
 /// Türkçe büyük/küçük harf ve aksan farkı gözetmeden karşılaştırma için.
 fn fold(s: &str) -> String {
@@ -138,12 +230,25 @@ impl App {
             }
         }
         let favorites: Vec<Favorite> = self.state.favorites.iter().map(|b| Favorite { title: b.title.clone(), url: b.url.clone() }).collect();
+        // Siteler: önce geçmiş ve yer işaretleri, sonra sık kullanılanlar; hep listenin altında.
+        let host_of = |u: &str| url::host(u).trim_start_matches("www.").to_string();
         for s in self.history.suggest(&typed, &favorites, "", 5) {
-            if rows.iter().any(|r| r.url == s.url) {
+            if rows.iter().filter(|r| is_site(r.kind)).count() >= MAX_SITES { break; }
+            if rows.iter().any(|r| r.url == s.url || (is_site(r.kind) && host_of(&r.url) == host_of(&s.url))) {
                 continue;
             }
             let kind = if self.is_bookmarked(&s.url) { Kind::Bookmark } else { Kind::History };
             rows.push(Row { kind, text: s.title, url: s.url });
+        }
+        if q.chars().count() >= 2 && !typed.contains(' ') {
+            for (words, site) in POPULAR {
+                if rows.iter().filter(|r| is_site(r.kind)).count() >= MAX_SITES { break; }
+                let host = host_of(site);
+                let hit = fold(words).split_whitespace().any(|w| w.starts_with(&q)) || host.starts_with(&q);
+                if hit && !rows.iter().any(|r| host_of(&r.url) == host) {
+                    rows.push(Row { kind: Kind::Site, text: host, url: site.to_string() });
+                }
+            }
         }
         rows
     }
@@ -156,16 +261,23 @@ impl App {
         }
         let search = self.state.settings.search_url();
         let Some(sg) = &mut self.suggest else { return };
+        // Aramalar sitelerin üstüne girer; siteler her zaman en altta kalır.
+        let (sites, mut head): (Vec<Row>, Vec<Row>) = sg.rows.drain(..).partition(|r| is_site(r.kind));
+        let room = MAX_ROWS.saturating_sub(head.len() + sites.len());
+        let mut added = 0;
         for q in list {
-            if sg.rows.len() >= MAX_ROWS {
+            if added >= room {
                 break;
             }
-            if q.eq_ignore_ascii_case(&sg.query) || sg.rows.iter().any(|r| r.kind == Kind::Search && r.text == q) {
+            if q.eq_ignore_ascii_case(&sg.query) || head.iter().any(|r| r.kind == Kind::Search && r.text == q) {
                 continue;
             }
             let u = format!("{search}{}", url::encode(&q));
-            sg.rows.push(Row { kind: Kind::Search, text: q, url: u });
+            head.push(Row { kind: Kind::Search, text: q, url: u });
+            added += 1;
         }
+        head.extend(sites);
+        sg.rows = head;
         let (edit, query, rows) = (sg.edit, sg.query.clone(), sg.rows.clone());
         self.show_suggest(edit, &query, rows);
     }
@@ -218,9 +330,7 @@ impl App {
                 }
                 let Ok(mut gfx) = Gfx::new() else { return };
                 gfx.set_dpi(self.dpi);
-                if crate::theme::glass() && super::apply_backdrop(hwnd, true) {
-                    gfx.set_glass(true);
-                }
+                // Öneri listesi opaktır: yazılar ClearType ile keskin çizilir.
                 self.suggest = Some(Suggest { hwnd, gfx, edit, query: query.to_string(), rows, selected: None, width: anchor.w });
                 defer(move || unsafe { let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE); });
             }
@@ -344,7 +454,7 @@ impl App {
                 sg.rows
                     .iter()
                     .map(|r| match r.kind {
-                        Kind::History | Kind::Bookmark => self.icon_for(&r.url),
+                        Kind::History | Kind::Bookmark | Kind::Site => self.icon_for(&r.url),
                         Kind::Tab(id) => self.index_of(id).and_then(|i| self.tabs[i].icon.clone()).or_else(|| self.icon_for(&r.url)),
                         _ => None,
                     })
@@ -363,7 +473,7 @@ impl App {
             return;
         }
         let g = &sg.gfx;
-        if crate::theme::glass() {
+        if sg.gfx.is_glass() {
             g.clear_transparent();
             let (c, a) = crate::theme::menu_tint();
             g.fill_alpha(Rect::new(0.0, 0.0, sg.width, h), c, a);
@@ -395,6 +505,11 @@ impl App {
                     g.text(&row.text, Rect::new(x, r.y, tw + 2.0, r.h), Font::Ui, ink(), Align::Left);
                     let hint = if matches!(row.kind, Kind::Tab(_)) { "— Sekmeye geç" } else { "— Komut" };
                     g.text(hint, Rect::new(x + tw + 8.0, r.y, (avail - tw - 8.0).max(0.0), r.h), Font::Small, accent(), Align::Left);
+                }
+                Kind::Site => {
+                    let tw = g.measure(&row.text, Font::Ui).min(avail * 0.7);
+                    g.text(&row.text, Rect::new(x, r.y, tw + 2.0, r.h), Font::Ui, ink(), Align::Left);
+                    g.text("— Siteye git", Rect::new(x + tw + 8.0, r.y, (avail - tw - 8.0).max(0.0), r.h), Font::Small, faint(), Align::Left);
                 }
                 Kind::History | Kind::Bookmark => {
                     let title = if row.text.is_empty() { url::display(&row.url) } else { row.text.clone() };

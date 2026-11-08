@@ -105,6 +105,8 @@ pub const CAPTION_BTN: f32 = 46.0;
 pub const CAPTION_H: f32 = TOOL_ROW;
 pub const TAB_MIN: f32 = 44.0;
 pub const RESIZE_EDGE: f32 = 6.0;
+/// Odak modunda üstte kalan, fareyi yakalayan şerit.
+pub const FOCUS_STRIP: f32 = 5.0;
 pub const MENU_WIDTH: f32 = 272.0;
 
 // Animasyon süreleri (ms).
@@ -133,6 +135,9 @@ pub const ICON_SHIELD: &str = "\u{EA18}";
 pub const ICON_GLOBE: &str = "\u{E774}";
 pub const ICON_DOC: &str = "\u{E8A5}";
 pub const ICON_FOLDER: &str = "\u{E8B7}";
+pub const ICON_SHARE: &str = "\u{E72D}";
+pub const ICON_PRIVATE: &str = "\u{E727}";
+pub const ICON_HOME: &str = "\u{E80F}";
 
 // ---------- Cam (Acrylic) ----------
 
@@ -159,6 +164,8 @@ pub fn tab_active() -> (Rgb, f32) { tint(if is_dark() { hover() } else { raised(
 pub fn menu_tint() -> (Rgb, f32) { tint(raised(), if is_dark() { 0.70 } else { 0.74 }) }
 /// Başlangıç sayfasının buzlu zemini.
 pub fn page_tint() -> (Rgb, f32) { tint(base(), if is_dark() { 0.72 } else { 0.70 }) }
+/// Sistem mavisi: yükleme çizgisi gibi vurgu renginden bağımsız durum göstergeleri.
+pub fn system_blue() -> Rgb { if is_dark() { 0x0A84FF } else { 0x007AFF } }
 /// Adres alanı: içindeki metin kutusuyla aynı renkte, opak.
 pub fn address_field() -> Rgb { palette().field }
 

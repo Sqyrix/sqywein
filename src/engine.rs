@@ -64,7 +64,11 @@ pub enum Event {
     WindowReady(u32, bool),
     CloseRequested(u32),
     ProcessFailed(u32, COREWEBVIEW2_PROCESS_FAILED_KIND),
-    Shortcut(u32),
+    Shortcut(u32, u32),
+    LinkPreview(u32, String),
+    Thumbnail(u64, u32, String),
+    OcrRequested(u32),
+    OcrCaptured(u32, u64, u64, Option<Image>),
     FullScreen(u32),
     FaviconChanged(u32),
     /// Site simgesi: çözülmüş resim ve önbelleğe yazılacak PNG baytları.
@@ -121,6 +125,13 @@ pub enum Background {
     Update(crate::update::Outcome),
     /// Windows Hello sonucu (istek kimliği, sonuç).
     Hello(u32, crate::hello::Outcome),
+    /// Sayfa çevirisinden bir grup (sekme, belge sırası, (düğüm, metin)).
+    Translated(u32, u64, Vec<(u32, String)>, bool),
+    Ocr(u32, u64, u64, std::result::Result<String, String>),
+    Preview(u64, serde_json::Value),
+    /// Başlangıç sayfası kartları: hava durumu (bulunan konumla) ve döviz kurları.
+    Weather(crate::widgets::WeatherState, Option<crate::widgets::Location>),
+    Rates(Option<crate::widgets::Rates>),
 }
 
 static BACKGROUND: Mutex<Vec<Background>> = Mutex::new(Vec::new());
@@ -228,6 +239,12 @@ pub fn set_network_interception(view: &ICoreWebView2, enabled: bool) -> Result<(
 }
 
 pub fn configure(ctrl: &ICoreWebView2Controller, id: u32, background: u32, prefs: &Settings) -> Result<ICoreWebView2> {
+    configure_mode(ctrl, id, background, prefs, false, None)
+}
+pub fn configure_preview(ctrl: &ICoreWebView2Controller, id: u32, background: u32, prefs: &Settings, target: &str) -> Result<ICoreWebView2> {
+    configure_mode(ctrl, id, background, prefs, true, target.starts_with("file://").then(|| target.to_string()))
+}
+fn configure_mode(ctrl: &ICoreWebView2Controller, id: u32, background: u32, prefs: &Settings, preview: bool, preview_file: Option<String>) -> Result<ICoreWebView2> {
     unsafe {
         let view = ctrl.CoreWebView2()?;
 
@@ -244,11 +261,12 @@ pub fn configure(ctrl: &ICoreWebView2Controller, id: u32, background: u32, prefs
         let settings = view.Settings()?;
         settings.SetIsStatusBarEnabled(true)?;
         // Hatalarda motorun (Edge'in) sayfası değil, Sqywein'in kendi sayfası görünür.
-        settings.SetIsBuiltInErrorPageEnabled(false)?;
+        settings.SetIsBuiltInErrorPageEnabled(preview)?;
+        if preview { settings.SetIsWebMessageEnabled(false)?; settings.SetAreDefaultScriptDialogsEnabled(false)?; settings.SetAreDefaultContextMenusEnabled(false)?; }
         if let Ok(s4) = settings.cast::<ICoreWebView2Settings4>() {
             // Şifreleri motorun kendi deposu değil, Sqywein'in şifre yöneticisi saklar.
             let _ = s4.SetIsPasswordAutosaveEnabled(false);
-            let _ = s4.SetIsGeneralAutofillEnabled(prefs.autofill);
+            let _ = s4.SetIsGeneralAutofillEnabled(prefs.autofill && !preview);
         }
         apply_tracking(&view, if prefs.privacy_shield { "strict" } else { &prefs.tracking });
         apply_color_scheme(&view);
@@ -257,11 +275,17 @@ pub fn configure(ctrl: &ICoreWebView2Controller, id: u32, background: u32, prefs
             &HSTRING::from(crate::adblock::COLLECTOR_SCRIPT),
             &AddScriptToExecuteOnDocumentCreatedCompletedHandler::create(Box::new(|_, _| Ok(()))),
         );
+        if !preview {
         // Giriş formlarını tanıyıp şifre yöneticisiyle doldurur.
         let _ = view.AddScriptToExecuteOnDocumentCreated(
             &HSTRING::from(include_str!("../ui/autofill.js").replace("/*__SQ_THEME__*/null", &crate::theme::message().to_string())),
             &AddScriptToExecuteOnDocumentCreatedCompletedHandler::create(Box::new(|_, _| Ok(()))),
         );
+        }
+        let _ = view.AddScriptToExecuteOnDocumentCreated(w!("document.addEventListener('click',e=>{if(!e.isTrusted||!e.shiftKey||e.ctrlKey||e.altKey||e.metaKey||e.button!==0)return;const a=e.target.closest&&e.target.closest('a[href]');if(!a||!/^https?:$/.test(a.protocol))return;e.preventDefault();e.stopImmediatePropagation();window.open(a.href,'_sqywein_preview');},true);"), &AddScriptToExecuteOnDocumentCreatedCompletedHandler::create(Box::new(|_, _| Ok(()))));
+        if preview {
+            view.add_PermissionRequested(&PermissionRequestedEventHandler::create(Box::new(|_, args| { if let Some(args) = args { if let Ok(a3) = args.cast::<ICoreWebView2PermissionRequestedEventArgs3>() { a3.SetSavesInProfile(false)?; } args.SetState(COREWEBVIEW2_PERMISSION_STATE_DENY)?; } Ok(()) })), &mut 0)?;
+        }
         // Mağazadaki "Chrome'a ekle" düğmesi bizim kurulumumuza bağlanır.
         let _ = view.AddScriptToExecuteOnDocumentCreated(
             &HSTRING::from(STORE_SCRIPT),
@@ -335,6 +359,7 @@ pub fn configure(ctrl: &ICoreWebView2Controller, id: u32, background: u32, prefs
         view.add_WebMessageReceived(
             &WebMessageReceivedEventHandler::create(Box::new(move |_, args| {
                 let Some(args) = args else { return Ok(()) };
+                if preview { return Ok(()); }
                 let mut source = PWSTR::null();
                 args.Source(&mut source)?;
                 let source = take_pwstr(source);
@@ -428,6 +453,7 @@ pub fn configure(ctrl: &ICoreWebView2Controller, id: u32, background: u32, prefs
             v4.add_DownloadStarting(
                 &DownloadStartingEventHandler::create(Box::new(move |_, args| {
                     let Some(args) = args else { return Ok(()) };
+                    if preview { args.SetCancel(true)?; return Ok(()); }
                     args.SetHandled(true)?;
                     push(Event::DownloadStarted(id, args.DownloadOperation()?));
                     Ok(())
@@ -439,10 +465,11 @@ pub fn configure(ctrl: &ICoreWebView2Controller, id: u32, background: u32, prefs
         view.add_NavigationStarting(
             &NavigationStartingEventHandler::create(Box::new(move |sender, args| {
                 let mut uri = PWSTR::null();
-                if let Some(args) = args {
+                if let Some(args) = &args {
                     let _ = args.Uri(&mut uri);
                 }
                 let uri = take_pwstr(uri);
+                if preview && !(uri.starts_with("https://") || uri.starts_with("http://") || preview_file.as_ref().is_some_and(|file| file.split('#').next() == uri.split('#').next())) { if let Some(args) = args { args.SetCancel(true)?; } return Ok(()); }
                 // Engelleyici sayacı ve "bu sayfa" bilgisi istekler başlamadan güncellenir.
                 crate::adblock::set_page(id, &uri);
                 if let Some(view) = sender {
@@ -487,14 +514,37 @@ pub fn configure(ctrl: &ICoreWebView2Controller, id: u32, background: u32, prefs
             })),
             &mut token,
         )?;
+        if let (Ok(v11), Ok(env9)) = (view.cast::<ICoreWebView2_11>(), view.cast::<ICoreWebView2_2>().and_then(|v| v.Environment()).and_then(|e| e.cast::<ICoreWebView2Environment9>())) {
+            let _ = view.AddScriptToExecuteOnDocumentCreated(w!("document.addEventListener('contextmenu',e=>{window.__sqImagePoint=[e.clientX,e.clientY];},true);"), &AddScriptToExecuteOnDocumentCreatedCompletedHandler::create(Box::new(|_, _| Ok(()))));
+            v11.add_ContextMenuRequested(&ContextMenuRequestedEventHandler::create(Box::new(move |_, args| {
+                let Some(args) = args else { return Ok(()) };
+                let target = args.ContextMenuTarget()?;
+                let mut kind = COREWEBVIEW2_CONTEXT_MENU_TARGET_KIND_PAGE;
+                target.Kind(&mut kind)?;
+                if kind != COREWEBVIEW2_CONTEXT_MENU_TARGET_KIND_IMAGE { return Ok(()); }
+                let item = env9.CreateContextMenuItem(w!("Canlı Metin: resimdeki yazıyı seç"), None, COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_COMMAND)?;
+                let mut token = 0;
+                item.add_CustomItemSelected(&CustomItemSelectedEventHandler::create(Box::new(move |_, _| { push(Event::OcrRequested(id)); Ok(()) })), &mut token)?;
+                args.MenuItems()?.InsertValueAtIndex(0, &item)?;
+                Ok(())
+            })), &mut token)?;
+        }
         view.add_NewWindowRequested(
             &NewWindowRequestedEventHandler::create(Box::new(move |_, args| {
                 if let Some(args) = args {
+                    if preview { args.SetHandled(true)?; return Ok(()); }
                     let mut uri = PWSTR::null();
                     args.Uri(&mut uri)?;
+                    let target = take_pwstr(uri);
+                    let name = args.cast::<ICoreWebView2NewWindowRequestedEventArgs2>().ok().map(|a| string(|p| a.Name(p))).unwrap_or_default();
+                    let initiated = flag(|b| args.IsUserInitiated(b));
+                    if name == "_sqywein_preview" && initiated {
+                        args.SetHandled(true)?;
+                        push(Event::LinkPreview(id, target)); return Ok(());
+                    }
                     let deferral = args.GetDeferral()?;
                     args.SetHandled(true)?;
-                    push(Event::NewWindow(id, take_pwstr(uri), Box::new(WindowRequest { args, deferral: Some(deferral) })));
+                    push(Event::NewWindow(id, target, Box::new(WindowRequest { args, deferral: Some(deferral) })));
                 }
                 Ok(())
             })),
@@ -502,7 +552,8 @@ pub fn configure(ctrl: &ICoreWebView2Controller, id: u32, background: u32, prefs
         )?;
         view.add_WindowCloseRequested(&WindowCloseRequestedEventHandler::create(Box::new(move |_, _| { push(Event::CloseRequested(id)); Ok(()) })), &mut token)?;
         if let Ok(v18) = view.cast::<ICoreWebView2_18>() {
-            v18.add_LaunchingExternalUriScheme(&LaunchingExternalUriSchemeEventHandler::create(Box::new(move |_, _| {
+            v18.add_LaunchingExternalUriScheme(&LaunchingExternalUriSchemeEventHandler::create(Box::new(move |_, args| {
+                if preview { if let Some(args) = args { args.SetCancel(true)?; } return Ok(()); }
                 // WebView2'nin yerleşik onayını/Windows protokol işleyicisini koru.
                 push(Event::ExternalLaunch(id)); Ok(())
             })), &mut token)?;
@@ -537,9 +588,9 @@ pub fn configure(ctrl: &ICoreWebView2Controller, id: u32, background: u32, prefs
                 }
                 let mut vk = 0u32;
                 args.VirtualKey(&mut vk)?;
-                if crate::keys::command(vk, crate::keys::modifiers(), false).is_some() {
+                if (id == u32::MAX - 1 && vk == 0x1B) || crate::keys::command(vk, crate::keys::modifiers(), false).is_some() {
                     args.SetHandled(true)?;
-                    push(Event::Shortcut(vk));
+                    push(Event::Shortcut(id, vk));
                 }
                 Ok(())
             })),
@@ -1082,4 +1133,57 @@ pub fn set_permission(view: &ICoreWebView2, tab: u32, origin: &str, kind: i32, s
 
 pub fn set_muted(view: &ICoreWebView2, muted: bool) {
     if let Ok(v) = view.cast::<ICoreWebView2_8>() { unsafe { let _ = v.SetIsMuted(muted); } }
+}
+
+/// Capture only on user request, without waking or recreating discarded views.
+pub fn capture_thumbnail(view: &ICoreWebView2, generation: u64, id: u32) {
+    // CapturePreview may never complete for a hidden controller. CDP can capture
+    // its compositor without showing, focusing or waking a suspended tab.
+    let snapshot_view = view.clone();
+    let metrics = CallDevToolsProtocolMethodCompletedHandler::create(Box::new(move |result, json| {
+        let parsed = serde_json::from_str::<serde_json::Value>(&json).ok();
+        let viewport = parsed.as_ref().and_then(|v| v.get("cssVisualViewport").or_else(|| v.get("visualViewport")));
+        let width = viewport.and_then(|v| v["clientWidth"].as_f64()).unwrap_or(0.0);
+        let height = viewport.and_then(|v| v["clientHeight"].as_f64()).unwrap_or(0.0);
+        if result.is_err() || width <= 0.0 || height <= 0.0 {
+            push(Event::Thumbnail(generation, id, String::new())); return Ok(());
+        }
+        let x = viewport.and_then(|v| v["pageX"].as_f64()).unwrap_or(0.0);
+        let y = viewport.and_then(|v| v["pageY"].as_f64()).unwrap_or(0.0);
+        let params = serde_json::json!({"format":"png","fromSurface":true,"captureBeyondViewport":false,"clip":{"x":x,"y":y,"width":width,"height":height,"scale":(400.0 / width.max(height)).min(1.0)}}).to_string();
+        let captured = CallDevToolsProtocolMethodCompletedHandler::create(Box::new(move |result, json| {
+            let encoded = if result.is_ok() {
+                serde_json::from_str::<serde_json::Value>(&json).ok().and_then(|v| v["data"].as_str().filter(|s| s.len() <= 1024 * 1024 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b"+/=".contains(&b))).map(str::to_string))
+            } else { None };
+            push(Event::Thumbnail(generation, id, encoded.map(|s| format!("data:image/png;base64,{s}")).unwrap_or_default())); Ok(())
+        }));
+        if unsafe { snapshot_view.CallDevToolsProtocolMethod(w!("Page.captureScreenshot"), &HSTRING::from(params), &captured) }.is_err() { push(Event::Thumbnail(generation, id, String::new())); }
+        Ok(())
+    }));
+    if unsafe { view.CallDevToolsProtocolMethod(w!("Page.getLayoutMetrics"), w!("{}"), &metrics) }.is_err() { push(Event::Thumbnail(generation, id, String::new())); }
+}
+
+pub fn capture_ocr(view: &ICoreWebView2, id: u32, epoch: u64, request: u64, rect: [f64; 4]) {
+    let Some(stream) = (unsafe { SHCreateMemStream(None) }) else { return };
+    let output = stream.clone();
+    let handler = CapturePreviewCompletedHandler::create(Box::new(move |result| {
+        let image = if result.is_ok() {
+            unsafe { let _ = output.Seek(0, windows::Win32::System::Com::STREAM_SEEK_SET, None); }
+            crate::image::from_stream(&output, 2500).and_then(|image| crate::ocr::crop(image, rect))
+        } else { None };
+        push(Event::OcrCaptured(id, epoch, request, image)); Ok(())
+    }));
+    unsafe { let _ = view.CapturePreview(COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG, &stream, &handler); }
+}
+
+/// Native menu commands retain their user gesture for activation-gated web APIs.
+pub fn evaluate_user_gesture(view: &ICoreWebView2, id: u32, epoch: u64, expression: &str) {
+    let params = serde_json::json!({"expression":expression,"awaitPromise":true,"returnByValue":true,"userGesture":true}).to_string();
+    let handler = CallDevToolsProtocolMethodCompletedHandler::create(Box::new(move |result, json| {
+        let value = if result.is_ok() { serde_json::from_str::<serde_json::Value>(&json).ok().and_then(|v| v["result"].get("value").cloned()) } else { None };
+        let mut value = value.unwrap_or_else(|| serde_json::json!({"k":"pip","ok":false,"error":"Görüntü içinde görüntü başlatılamadı."}));
+        value["e"] = serde_json::json!(epoch);
+        push(Event::Script(id, value.to_string())); Ok(())
+    }));
+    unsafe { let _ = view.CallDevToolsProtocolMethod(w!("Runtime.evaluate"), &HSTRING::from(params), &handler); }
 }

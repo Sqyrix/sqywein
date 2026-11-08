@@ -77,6 +77,11 @@ pub enum Font {
     /// Pencere düğmeleri ve sekme kapatma (10 px).
     SmallIcon,
     Big,
+    /// Renkli emoji (hava durumu simgeleri).
+    Emoji,
+    EmojiSmall,
+    /// Hava durumu kartındaki dev sıcaklık.
+    Giant,
 }
 
 fn color(rgb: Rgb, alpha: f32) -> D2D1_COLOR_F {
@@ -100,6 +105,9 @@ struct Formats {
     mid_icon: IDWriteTextFormat,
     small_icon: IDWriteTextFormat,
     big: IDWriteTextFormat,
+    emoji: IDWriteTextFormat,
+    emoji_small: IDWriteTextFormat,
+    giant: IDWriteTextFormat,
 }
 
 pub struct Gfx {
@@ -140,13 +148,17 @@ impl Gfx {
                 w!("Segoe UI")
             };
             let fmt = Formats {
-                ui: text_format(&dwrite, ui_family, DWRITE_FONT_WEIGHT_NORMAL, 12.5)?,
+                // Tam sayı boyutlar: harfler piksel ızgarasına oturur, kenarlar net kalır.
+                ui: text_format(&dwrite, ui_family, DWRITE_FONT_WEIGHT_NORMAL, 13.0)?,
                 ui_bold: text_format(&dwrite, ui_family, DWRITE_FONT_WEIGHT_SEMI_BOLD, 13.0)?,
-                small: text_format(&dwrite, ui_family, DWRITE_FONT_WEIGHT_NORMAL, 11.5)?,
+                small: text_format(&dwrite, ui_family, DWRITE_FONT_WEIGHT_NORMAL, 12.0)?,
                 icon: text_format(&dwrite, icon_family, DWRITE_FONT_WEIGHT_NORMAL, 16.0)?,
                 mid_icon: text_format(&dwrite, icon_family, DWRITE_FONT_WEIGHT_NORMAL, 12.0)?,
                 small_icon: text_format(&dwrite, icon_family, DWRITE_FONT_WEIGHT_NORMAL, 10.0)?,
                 big: text_format(&dwrite, display_family, DWRITE_FONT_WEIGHT_SEMI_BOLD, 30.0)?,
+                emoji: text_format(&dwrite, w!("Segoe UI Emoji"), DWRITE_FONT_WEIGHT_NORMAL, 44.0)?,
+                emoji_small: text_format(&dwrite, w!("Segoe UI Emoji"), DWRITE_FONT_WEIGHT_NORMAL, 17.0)?,
+                giant: text_format(&dwrite, display_family, DWRITE_FONT_WEIGHT_LIGHT, 64.0)?,
             };
             let props = D2D1_STROKE_STYLE_PROPERTIES {
                 startCap: D2D1_CAP_STYLE_ROUND,
@@ -168,6 +180,8 @@ impl Gfx {
             unsafe { t.SetDpi(self.dpi, self.dpi) };
         }
     }
+
+    pub fn is_glass(&self) -> bool { self.glass }
 
     /// Cam açılıp kapanınca hedef yeniden kurulur (saydamlık modu değişir).
     pub fn set_glass(&mut self, on: bool) {
@@ -212,6 +226,18 @@ impl Gfx {
             };
             // ClearType saydam yüzeyde renkli saçak bırakır; camda gri tonlama.
             unsafe { target.SetTextAntialiasMode(if self.glass { D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE } else { D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE }) };
+            if self.glass {
+                // Gri tonlamada netlik: harf aralıkları piksel ızgarasına oturur (GDI uyumlu
+                // ölçüm), kıvrımlar iki yönde de yumuşatılır (simetrik), kontrast ölçülü artırılır.
+                // Windows'un kendi ekran ayarları (gamma, kontrast) kullanılır; yalnızca
+                // ClearType kapalı ve yumuşatma iki yönlü (simetrik).
+                if let (Ok(f1), Ok(system)) = (self.dwrite.cast::<IDWriteFactory1>(), unsafe { self.dwrite.CreateRenderingParams() }) {
+                    let (gamma, contrast) = unsafe { (system.GetGamma(), system.GetEnhancedContrast()) };
+                    if let Ok(params) = unsafe { f1.CreateCustomRenderingParams(gamma, contrast, contrast.max(1.0), 0.0, DWRITE_PIXEL_GEOMETRY_FLAT, DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC) } {
+                        unsafe { target.SetTextRenderingParams(&params) };
+                    }
+                }
+            }
             self.brush = unsafe { target.CreateSolidColorBrush(&color(0, 1.0), None) }.ok();
             self.bitmaps.borrow_mut().trim_to(0);
             self.target = Some(target);
@@ -349,6 +375,46 @@ impl Gfx {
         }
     }
 
+    /// Yuvarlak köşeli, yukarıdan aşağı (ya da çapraz) gradyan dolgu.
+    pub fn round_gradient(&self, r: Rect, radius: f32, from: Rgb, to: Rgb, diagonal: bool) {
+        self.round_gradient_alpha(r, radius, (from, 1.0), (to, 1.0), diagonal);
+    }
+
+    /// Saydamlıklı gradyan (cam parlaması gibi katmanlar için).
+    pub fn round_gradient_alpha(&self, r: Rect, radius: f32, from: (Rgb, f32), to: (Rgb, f32), diagonal: bool) {
+        let Some(t) = &self.target else { return };
+        let a = self.opacity.get();
+        unsafe {
+            let stops = [
+                D2D1_GRADIENT_STOP { position: 0.0, color: color(from.0, from.1 * a) },
+                D2D1_GRADIENT_STOP { position: 1.0, color: color(to.0, to.1 * a) },
+            ];
+            let Ok(coll) = t.CreateGradientStopCollection(&stops, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP) else { return };
+            let props = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
+                startPoint: v2(r.x, r.y),
+                endPoint: if diagonal { v2(r.right(), r.bottom()) } else { v2(r.x, r.bottom()) },
+            };
+            let Ok(brush) = t.CreateLinearGradientBrush(&props, None, &coll) else { return };
+            let rr = D2D1_ROUNDED_RECT { rect: self.snap_rect(r), radiusX: radius, radiusY: radius };
+            t.FillRoundedRectangle(&rr, &brush);
+        }
+    }
+
+    /// Noktaları birleştiren yumuşak uçlu çizgi (küçük grafikler için).
+    pub fn polyline(&self, points: &[(f32, f32)], rgb: Rgb, alpha: f32, width: f32) {
+        if points.len() < 2 { return; }
+        let Some((t, b)) = self.paint(rgb, alpha) else { return };
+        unsafe {
+            let Ok(path) = self.factory.CreatePathGeometry() else { return };
+            let Ok(sink) = path.Open() else { return };
+            sink.BeginFigure(v2(points[0].0, points[0].1), D2D1_FIGURE_BEGIN_HOLLOW);
+            for p in &points[1..] { sink.AddLine(v2(p.0, p.1)); }
+            sink.EndFigure(D2D1_FIGURE_END_OPEN);
+            if sink.Close().is_err() { return; }
+            t.DrawGeometry(&path, b, width, self.round_caps.as_ref());
+        }
+    }
+
     /// Ortadan dışa doğru sönen yumuşak ışık.
     pub fn glow(&self, cx: f32, cy: f32, rx: f32, ry: f32, rgb: Rgb, alpha: f32) {
         let Some(t) = &self.target else { return };
@@ -412,7 +478,14 @@ impl Gfx {
     pub fn measure(&self, s: &str, font: Font) -> f32 {
         let wide: Vec<u16> = s.encode_utf16().collect();
         unsafe {
-            let Ok(layout) = self.dwrite.CreateTextLayout(&wide, self.format(font), 10_000.0, 100.0) else { return 0.0 };
+            // Çizimle aynı ölçüm modu: GDI uyumlu yazılar aynı genişlikte ölçülür, kesilmez.
+            let gdi = matches!(font, Font::Icon | Font::MidIcon | Font::SmallIcon | Font::Ui | Font::UiBold | Font::Small);
+            let layout = if gdi {
+                self.dwrite.CreateGdiCompatibleTextLayout(&wide, self.format(font), 10_000.0, 100.0, self.dpi / 96.0, None, true)
+            } else {
+                self.dwrite.CreateTextLayout(&wide, self.format(font), 10_000.0, 100.0)
+            };
+            let Ok(layout) = layout else { return 0.0 };
             let mut m = DWRITE_TEXT_METRICS::default();
             if layout.GetMetrics(&mut m).is_ok() { m.widthIncludingTrailingWhitespace } else { 0.0 }
         }
@@ -427,6 +500,9 @@ impl Gfx {
             Font::MidIcon => &self.fmt.mid_icon,
             Font::SmallIcon => &self.fmt.small_icon,
             Font::Big => &self.fmt.big,
+            Font::Emoji => &self.fmt.emoji,
+            Font::EmojiSmall => &self.fmt.emoji_small,
+            Font::Giant => &self.fmt.giant,
         }
     }
 
@@ -441,11 +517,14 @@ impl Gfx {
                 Align::Right => DWRITE_TEXT_ALIGNMENT_TRAILING,
             });
             // Simgeler GDI uyumlu ölçümle piksel ızgarasına oturur, daha keskin görünür.
+            // Simgeler ve küçük arayüz yazıları (sekme adı, adres) GDI uyumlu ölçümle
+            // piksel ızgarasına oturur; büyük başlıklar doğal ölçümle kalır.
             let mode = match font {
-                Font::Icon | Font::MidIcon | Font::SmallIcon => DWRITE_MEASURING_MODE_GDI_NATURAL,
+                Font::Icon | Font::MidIcon | Font::SmallIcon | Font::Ui | Font::UiBold | Font::Small => DWRITE_MEASURING_MODE_GDI_NATURAL,
                 _ => DWRITE_MEASURING_MODE_NATURAL,
             };
-            t.DrawText(&wide, fmt, &self.snap_rect(r), b, D2D1_DRAW_TEXT_OPTIONS_CLIP, mode);
+            let options = if matches!(font, Font::Emoji | Font::EmojiSmall) { D2D1_DRAW_TEXT_OPTIONS_CLIP | D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT } else { D2D1_DRAW_TEXT_OPTIONS_CLIP };
+            t.DrawText(&wide, fmt, &self.snap_rect(r), b, options, mode);
         }
     }
 }
