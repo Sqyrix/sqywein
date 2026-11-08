@@ -9,6 +9,8 @@ use std::{collections::BTreeMap, fs, io, path::PathBuf};
 #[serde(rename_all = "PascalCase")]
 pub struct SavedTab {
     #[serde(default)]
+    pub pinned: bool,
+    #[serde(default)]
     pub title: String,
     #[serde(default)]
     pub url: String,
@@ -28,9 +30,12 @@ pub struct Bookmark {
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
+    pub theme: String,
     pub search_engine: String,
     pub startup: String,
     pub freeze_tabs: bool,
+    pub never_sleep: Vec<String>,
+    pub download_folder: String,
     pub sleep_tabs: bool,
     pub hardware_acceleration: bool,
     /// Yüzde; 0 = sistem ölçeği.
@@ -50,14 +55,20 @@ pub struct Settings {
     pub accent: String,
     /// GitHub'dan otomatik güncelleme.
     pub auto_update: bool,
+    pub animations: bool,
+    /// Pencerenin arkasında Windows camı (Acrylic) ve saydam araç çubuğu.
+    pub glass: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            theme: "system".into(),
             search_engine: "google".into(),
             startup: "restore".into(),
             freeze_tabs: true,
+            never_sleep: Vec::new(),
+            download_folder: String::new(),
             sleep_tabs: false,
             hardware_acceleration: true,
             default_zoom: 0,
@@ -69,8 +80,10 @@ impl Default for Settings {
             search_suggestions: true,
             adblock: true,
             adblock_level: 2,
-            accent: "purple".into(),
+            accent: "blue".into(),
             auto_update: true,
+            animations: true,
+            glass: true,
         }
     }
 }
@@ -113,6 +126,8 @@ pub struct Profile {
 #[derive(Serialize, Deserialize, Clone, Default)]
 #[serde(rename_all = "PascalCase", default)]
 pub struct DownloadRecord {
+    #[serde(skip)]
+    pub private: bool,
     pub id: u32,
     pub name: String,
     pub path: String,
@@ -127,6 +142,10 @@ pub struct DownloadRecord {
 #[derive(Serialize, Deserialize, Default)]
 #[serde(rename_all = "PascalCase")]
 pub struct AppState {
+    #[serde(default)]
+    pub default_prompt_seen: bool,
+    #[serde(default)]
+    pub browser_registration: String,
     #[serde(default)]
     pub tabs: Vec<SavedTab>,
     #[serde(default)]
@@ -163,6 +182,7 @@ pub struct AppState {
     #[serde(default)]
     pub update_checked: u64,
     #[serde(default)]
+    #[serde(serialize_with = "public_downloads")]
     pub download_list: Vec<DownloadRecord>,
     /// Bizim kurduğumuz uzantıların klasörleri: uzantı kimliği → klasör.
     #[serde(default)]
@@ -173,6 +193,10 @@ pub struct AppState {
     /// Tanımadığımız alanlar: yazarken geri konur.
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+}
+
+fn public_downloads<S: serde::Serializer>(items: &[DownloadRecord], serializer: S) -> Result<S::Ok, S::Error> {
+    items.iter().filter(|d| !d.private).collect::<Vec<_>>().serialize(serializer)
 }
 
 pub const DEFAULT_PROFILE: &str = "default";
@@ -244,6 +268,18 @@ fn strip_bom(bytes: &[u8]) -> &[u8] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn private_downloads_never_reach_disk() {
+        let mut state = AppState::default();
+        state.download_list.push(DownloadRecord { private: true, url: "https://private.invalid/secret".into(), path: "private-path".into(), ..Default::default() });
+        state.download_list.push(DownloadRecord { url: "https://public.invalid/file".into(), ..Default::default() });
+        let json = serde_json::to_string(&state).unwrap();
+        assert!(!json.contains("private.invalid")); assert!(!json.contains("private-path"));
+        let loaded: AppState = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded.download_list.len(), 1);
+        assert_eq!(state.download_list.len(), 2);
+    }
 
     #[test]
     fn bilinmeyen_alanlar_korunur() {

@@ -91,7 +91,7 @@ pub fn png_data_url(path: &Path) -> String {
     }
 }
 
-fn base64(bytes: &[u8]) -> String {
+pub fn base64(bytes: &[u8]) -> String {
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
@@ -103,27 +103,6 @@ fn base64(bytes: &[u8]) -> String {
         out.push(if chunk.len() > 2 { T[n as usize & 63] as char } else { '=' });
     }
     out
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn dosya_simgeleri() {
-        let _ = unsafe { windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_APARTMENTTHREADED) };
-        for ext in ["rar", "txt", "pdf", "zip"] {
-            let img = super::file_icon(&format!("dosya.{ext}"), false).expect(ext);
-            assert!(img.width >= 16 && img.pixels.iter().any(|&b| b != 0), "{ext} boş");
-            let url = super::to_data_url(&img);
-            assert!(url.starts_with("data:image/png;base64,") && url.len() > 100, "{ext} png");
-        }
-    }
-
-    #[test]
-    fn base64_kodlama() {
-        assert_eq!(super::base64(b"Man"), "TWFu");
-        assert_eq!(super::base64(b"Ma"), "TWE=");
-        assert_eq!(super::base64(b"M"), "TQ==");
-    }
 }
 
 /// Dosyanın Windows'taki simgesi: o türü açan programın simgesi (ör. .rar için WinRAR).
@@ -192,4 +171,25 @@ pub fn to_data_url(img: &Image) -> String {
         }
     };
     encode().map(|b| format!("data:image/png;base64,{}", base64(&b))).unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn dosya_simgeleri() {
+        let _ = unsafe { windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_APARTMENTTHREADED) };
+        for ext in ["rar", "txt", "pdf", "zip"] {
+            let img = super::file_icon(&format!("dosya.{ext}"), false).expect(ext);
+            assert!(img.width >= 16 && img.pixels.iter().any(|&b| b != 0), "{ext} boş");
+            let url = super::to_data_url(&img);
+            assert!(url.starts_with("data:image/png;base64,") && url.len() > 100, "{ext} png");
+        }
+    }
+
+    #[test]
+    fn base64_kodlama() {
+        assert_eq!(super::base64(b"Man"), "TWFu");
+        assert_eq!(super::base64(b"Ma"), "TWE=");
+        assert_eq!(super::base64(b"M"), "TQ==");
+    }
 }

@@ -1,8 +1,20 @@
 'use strict';
 const bridge = window.chrome && window.chrome.webview;
 const handlers = new Map();
+on('motion', d => document.documentElement.classList.toggle('reduce-motion', d.enabled === false));
+setTimeout(() => send('motion.get'), 0);
 // Vurgu rengi ayarlardan değişince sayfa yeniden yüklenmeden güncellenir.
-setTimeout(() => on('theme', d => { if (typeof d.accent === 'string' && /^#[0-9A-F]{6}$/i.test(d.accent)) document.documentElement.style.setProperty('--accent', d.accent); }), 0);
+on('theme',d=>{
+  const root=document.documentElement;
+  if(['light','dark','sqywein','system'].includes(d.name))root.dataset.theme=d.name;
+  if(typeof d.dark==='boolean')root.style.colorScheme=d.dark?'dark':'light';
+  for(const key of ['base','raised','hover','line','ink','muted','faint','field','danger']){
+    const value=d.colors?.[key];if(typeof value==='string'&&/^#[0-9A-F]{6}$/i.test(value))root.style.setProperty('--'+key,value);
+  }
+  if(typeof d.accent==='string'&&/^#[0-9A-F]{6}$/i.test(d.accent))root.style.setProperty('--accent',d.accent);
+});
+setTimeout(()=>send('theme.get'),0);
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>{if(document.documentElement.dataset.theme==='system')send('theme.get');});
 function on(type, handler) {
   if (!handlers.has(type)) handlers.set(type, new Set());
   handlers.get(type).add(handler);
@@ -94,13 +106,20 @@ if (!bridge) {
     downloads:[{id:'d1',name:'sqywein-kilavuz.pdf',path:'C:\\Users\\Örnek\\Downloads\\sqywein-kilavuz.pdf',url:'https://example.com/kilavuz.pdf',status:'done',received:2516582,total:2516582,when:ago(0)},{id:'d2',name:'tatil-fotograflari.zip',path:'C:\\Users\\Örnek\\Downloads\\tatil-fotograflari.zip',url:'https://example.com/photos.zip',status:'progress',received:15728640,total:52428800,when:ago(0,1)},{id:'d3',name:'notlar.txt',path:'C:\\Users\\Örnek\\Downloads\\notlar.txt',url:'https://example.com/notes.txt',status:'failed',received:0,total:0,when:ago(1)}],
     bookmarks:[{title:'Rust programlama dili',url:'https://www.rust-lang.org/'},{title:'MDN Web Docs',url:'https://developer.mozilla.org/'},{title:'Vikipedi',url:'https://tr.wikipedia.org/'},{title:'Project Gutenberg',url:'https://www.gutenberg.org/'}],
     extensions:[{id:'e1',name:'uBlock Origin',enabled:true,pinned:true,icon:''},{id:'e2',name:'Dark Reader',enabled:false,pinned:false,icon:''}],
-    settings:{searchEngine:'google',startup:'restore',freezeTabs:true,sleepTabs:false,hardwareAcceleration:true,defaultZoom:0,savePasswords:true,autofill:true,tracking:'balanced'},
+    settings:{theme:'sqywein',accent:'purple',searchEngine:'google',startup:'restore',freezeTabs:true,sleepTabs:false,hardwareAcceleration:true,defaultZoom:0,savePasswords:true,autofill:true,tracking:'balanced'},
     profiles:[{id:'p1',name:'Kişisel',email:'',color:'#AF85FC',current:true},{id:'p2',name:'İş',email:'ornek@example.com',color:'#8BBCC8',current:false}]
   };
   let historyQuery='';let historyLimit=500;let sequence=2;
   const reply=(type,payload) => receive(structuredClone({type,...payload}));
   const historyList=() => reply('history.list',{items:state.history.filter(item => `${item.title} ${item.url}`.toLocaleLowerCase('tr-TR').includes(historyQuery.toLocaleLowerCase('tr-TR'))).slice(0,historyLimit)});
   const settingsGet=() => reply('settings.get',{settings:state.settings,profiles:state.profiles,about:{version:'0.1.0 (önizleme)',engine:'WebView2 · önizleme verileri'}});
+  const themeGet=()=>{
+    const name=state.settings.theme||'sqywein';const light=name==='light'||(name==='system'&&!matchMedia('(prefers-color-scheme: dark)').matches);
+    const keys=['base','raised','hover','line','ink','muted','faint','field','danger'];
+    const values=light?['F5F6F8','FFFFFF','E9EBEF','C4C8D0','1C2027','4F5968','596473','E8EBF2','B42318']:name==='sqywein'?['14121C','211D2E','2E2940','3D3654','F4F1FC','B8AED0','8E84A8','2A2540','FF857C']:['151515','222222','303030','454545','F2F2F2','C0C0C0','9A9A9A','2B2B2B','FF857C'];
+    const accent=(light?{purple:'6D36C9',blue:'1C5ED4',green:'137A48',orange:'AA4E00',pink:'AA2D75',teal:'007878'}:{purple:'AF85FC',blue:'6EA8FE',green:'5FD39A',orange:'FFA45C',pink:'F28AC9',teal:'4FD1D9'})[state.settings.accent]||(light?'6D36C9':'AF85FC');
+    reply('theme',{name,dark:!light,accent:'#'+accent,colors:Object.fromEntries(keys.map((k,i)=>[k,'#'+values[i]]))});
+  };
   let passwordQuery='';let passwordSequence=2;
   const passwordList=() => reply('passwords.list',{items:state.passwords.filter(i => `${i.origin} ${i.username}`.toLocaleLowerCase('tr-TR').includes(passwordQuery.toLocaleLowerCase('tr-TR'))).sort((a,b) => host(a.origin).localeCompare(host(b.origin)) || a.username.localeCompare(b.username)).map(({id,origin,username,lastUsed}) => ({id,origin,username,lastUsed}))});
   const passwordPut=(url,username,password,note) => {
@@ -151,7 +170,8 @@ if (!bridge) {
       case 'extensions.toggle':case 'extensions.pin':{const item=state.extensions.find(i => i.id===message.id);if(item){if(type.endsWith('toggle'))item.enabled=message.enabled;else item.pinned=message.pinned;}reply('extensions.list',{supported:true,items:state.extensions});break;}
       case 'extensions.loadUnpacked':notify('Önizleme: klasör seçici yalnızca Sqywein içinde açılır.');break;
       case 'settings.get':settingsGet();break;
-      case 'settings.set':state.settings[message.key]=message.value;break;
+      case 'theme.get':themeGet();break;
+      case 'settings.set':state.settings[message.key]=message.value;if(['theme','accent'].includes(message.key))themeGet();break;
       case 'data.clear':if(message.kinds.includes('history'))state.history=[];reply(type,{kinds:message.kinds});break;
       case 'profiles.add':state.profiles.push({id:`p${++sequence}`,name:message.name,email:'',color:'#AF85FC',current:false});settingsGet();break;
       case 'profiles.rename':{const profile=state.profiles.find(i => i.id===message.id);if(profile)profile.name=message.name;settingsGet();break;}

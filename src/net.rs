@@ -6,8 +6,7 @@ use windows::{
         Foundation::{LocalFree, HLOCAL},
         Security::Cryptography::{CryptProtectData, CryptUnprotectData, CRYPT_INTEGER_BLOB},
         System::Com::{
-            CoInitializeEx, IStream,
-            Urlmon::URLOpenBlockingStreamW,
+            CoInitializeEx,
             COINIT_MULTITHREADED,
         },
     },
@@ -20,24 +19,42 @@ pub fn init_thread() {
 
 /// Adresin içeriğini belleğe indirir; `max` baytı aşarsa keser.
 pub fn fetch(url: &str, max: usize) -> Option<Vec<u8>> {
+    use windows::Win32::Networking::WinHttp::*;
+    struct Handle(*mut std::ffi::c_void);
+    impl Drop for Handle { fn drop(&mut self) { unsafe { let _ = WinHttpCloseHandle(self.0); } } }
     unsafe {
-        let mut stream: Option<IStream> = None;
-        URLOpenBlockingStreamW(None, &HSTRING::from(url), &mut stream, 0, None).ok()?;
-        let stream = stream?;
-        let mut out = Vec::new();
-        let mut buf = [0u8; 16 * 1024];
+        let wide: Vec<u16> = url.encode_utf16().collect();
+        let mut parts = URL_COMPONENTS { dwStructSize: std::mem::size_of::<URL_COMPONENTS>() as u32,
+            dwHostNameLength: u32::MAX, dwUrlPathLength: u32::MAX, dwExtraInfoLength: u32::MAX, ..Default::default() };
+        WinHttpCrackUrl(&wide, 0, &mut parts).ok()?;
+        if parts.nScheme != WINHTTP_INTERNET_SCHEME_HTTPS && parts.nScheme != WINHTTP_INTERNET_SCHEME_HTTP { return None; }
+        let text = |p: PWSTR, len: u32| -> String { if p.is_null() || len == 0 { String::new() } else { String::from_utf16_lossy(std::slice::from_raw_parts(p.0, len as usize)) } };
+        let host = HSTRING::from(text(parts.lpszHostName, parts.dwHostNameLength));
+        let mut path = text(parts.lpszUrlPath, parts.dwUrlPathLength);
+        if path.is_empty() { path.push('/'); }
+        path.push_str(&text(parts.lpszExtraInfo, parts.dwExtraInfoLength));
+        let session = Handle(WinHttpOpen(w!("Sqywein/0.2"), WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, PCWSTR::null(), PCWSTR::null(), 0));
+        if session.0.is_null() { return None; }
+        WinHttpSetTimeouts(session.0, 5000, 5000, 5000, 10000).ok()?;
+        let connection = Handle(WinHttpConnect(session.0, &host, parts.nPort, 0));
+        if connection.0.is_null() { return None; }
+        let flags = if parts.nScheme == WINHTTP_INTERNET_SCHEME_HTTPS { WINHTTP_FLAG_SECURE } else { WINHTTP_OPEN_REQUEST_FLAGS(0) };
+        let request = Handle(WinHttpOpenRequest(connection.0, w!("GET"), &HSTRING::from(path), PCWSTR::null(), PCWSTR::null(), std::ptr::null(), flags));
+        if request.0.is_null() { return None; }
+        WinHttpSendRequest(request.0, None, None, 0, 0, 0).ok()?;
+        WinHttpReceiveResponse(request.0, std::ptr::null_mut()).ok()?;
+        let mut status = 0u32; let mut size = 4;
+        WinHttpQueryHeaders(request.0, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, PCWSTR::null(), Some(&mut status as *mut _ as _), &mut size, std::ptr::null_mut()).ok()?;
+        if !(200..300).contains(&status) { return None; }
+        let start = std::time::Instant::now();
+        let mut out = Vec::new(); let mut buf = [0u8; 16 * 1024];
         loop {
-            let mut read = 0u32;
-            let hr = stream.Read(buf.as_mut_ptr() as _, buf.len() as u32, Some(&mut read));
-            if hr.is_err() || read == 0 {
-                break;
-            }
+            let mut read = 0;
+            WinHttpReadData(request.0, buf.as_mut_ptr() as _, buf.len() as u32, &mut read).ok()?;
+            if read == 0 { return Some(out); }
+            if out.len() + read as usize > max || start.elapsed().as_secs() > 60 { return None; }
             out.extend_from_slice(&buf[..read as usize]);
-            if out.len() >= max {
-                break;
-            }
         }
-        Some(out)
     }
 }
 
@@ -70,6 +87,9 @@ pub fn unprotect(data: &[u8]) -> Option<Vec<u8>> {
 pub fn parse_suggestions(bytes: &[u8]) -> Vec<String> {
     let text = String::from_utf8_lossy(bytes);
     let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { return Vec::new() };
+    if let Some(items) = v.as_array().filter(|a| a.first().is_some_and(|x| x.is_object())) {
+        return items.iter().filter_map(|v| v["phrase"].as_str().map(str::to_string)).take(8).collect();
+    }
     v.get(1)
         .and_then(|a| a.as_array())
         .map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_string)).collect())

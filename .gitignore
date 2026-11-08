@@ -1,6 +1,8 @@
 
 # Rust
 target/
+ui/.qa/
 
 # Bearbyte yerel kaydı
 .bearbyte/
+dist/

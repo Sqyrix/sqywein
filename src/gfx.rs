@@ -8,7 +8,6 @@
 use crate::{image::Image, theme::Rgb};
 use std::{
     cell::{Cell, RefCell},
-    collections::HashMap,
 };
 use windows::{
     core::*,
@@ -114,8 +113,10 @@ pub struct Gfx {
     /// Sonraki çizimlerin saydamlığı (animasyonlar için).
     opacity: Cell<f32>,
     /// Resimlerin bu hedefe yüklenmiş halleri; hedef yenilenince boşaltılır.
-    bitmaps: RefCell<HashMap<u64, ID2D1Bitmap>>,
+    bitmaps: RefCell<crate::cache::Cache<u64, ID2D1Bitmap>>,
     pub hardware: bool,
+    /// Pencere camla çiziliyor: hedef saydamlık taşır, yazılar gri tonlamalı.
+    glass: bool,
 }
 
 impl Gfx {
@@ -157,7 +158,7 @@ impl Gfx {
                 dashOffset: 0.0,
             };
             let round_caps = factory.CreateStrokeStyle(&props, None).ok();
-            Ok(Self { factory, dwrite, fmt, target: None, brush: None, round_caps, dpi: 96.0, opacity: Cell::new(1.0), bitmaps: RefCell::new(HashMap::new()), hardware: false })
+            Ok(Self { factory, dwrite, fmt, target: None, brush: None, round_caps, dpi: 96.0, opacity: Cell::new(1.0), bitmaps: RefCell::new(crate::cache::Cache::new(192)), hardware: false, glass: false })
         }
     }
 
@@ -165,6 +166,15 @@ impl Gfx {
         self.dpi = dpi as f32;
         if let Some(t) = &self.target {
             unsafe { t.SetDpi(self.dpi, self.dpi) };
+        }
+    }
+
+    /// Cam açılıp kapanınca hedef yeniden kurulur (saydamlık modu değişir).
+    pub fn set_glass(&mut self, on: bool) {
+        if self.glass != on {
+            self.glass = on;
+            self.target = None;
+            self.brush = None;
         }
     }
 
@@ -184,8 +194,8 @@ impl Gfx {
                 r#type: if self.hardware { D2D1_RENDER_TARGET_TYPE_DEFAULT } else { D2D1_RENDER_TARGET_TYPE_SOFTWARE },
                 pixelFormat: D2D1_PIXEL_FORMAT {
                     format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                    // Opak hedef: ClearType yalnızca böyle çalışır.
-                    alphaMode: D2D1_ALPHA_MODE_IGNORE,
+                    // Opak hedefte ClearType; camda saydam (önceden çarpılmış) hedef.
+                    alphaMode: if self.glass { D2D1_ALPHA_MODE_PREMULTIPLIED } else { D2D1_ALPHA_MODE_IGNORE },
                 },
                 dpiX: self.dpi,
                 dpiY: self.dpi,
@@ -200,9 +210,10 @@ impl Gfx {
             let Ok(target) = (unsafe { self.factory.CreateHwndRenderTarget(&props, &hwnd_props) }) else {
                 return false;
             };
-            unsafe { target.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE) };
+            // ClearType saydam yüzeyde renkli saçak bırakır; camda gri tonlama.
+            unsafe { target.SetTextAntialiasMode(if self.glass { D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE } else { D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE }) };
             self.brush = unsafe { target.CreateSolidColorBrush(&color(0, 1.0), None) }.ok();
-            self.bitmaps.borrow_mut().clear();
+            self.bitmaps.borrow_mut().trim_to(0);
             self.target = Some(target);
         }
         self.opacity.set(1.0);
@@ -245,6 +256,19 @@ impl Gfx {
     pub fn clear(&self, rgb: Rgb) {
         if let Some(t) = &self.target {
             unsafe { t.Clear(Some(&color(rgb, 1.0))) };
+        }
+    }
+
+    /// Tamamen saydam temizler: altındaki Windows camı görünür.
+    pub fn clear_transparent(&self) {
+        if let Some(t) = &self.target {
+            unsafe { t.Clear(Some(&D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 0.0 })) };
+        }
+    }
+
+    pub fn fill_alpha(&self, r: Rect, rgb: Rgb, alpha: f32) {
+        if let Some((t, b)) = self.paint(rgb, alpha) {
+            unsafe { t.FillRectangle(&self.snap_rect(r), b) };
         }
     }
 
@@ -350,6 +374,8 @@ impl Gfx {
     }
 
     /// Resmi dikdörtgene sığdırır; `circle` ise yuvarlak kırpar (profil fotoğrafı).
+    pub fn trim_images(&self) { self.bitmaps.borrow_mut().trim_to(32); }
+
     pub fn image(&self, img: &Image, r: Rect, circle: bool) {
         let Some(t) = &self.target else { return };
         let mut cache = self.bitmaps.borrow_mut();

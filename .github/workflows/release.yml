@@ -48,9 +48,11 @@ jobs:
           Copy-Item target/release/sqywein.exe sqywein.exe
           $hash = (Get-FileHash sqywein.exe -Algorithm SHA256).Hash.ToLower()
           Set-Content -NoNewline -Encoding ascii -Path sqywein.exe.sha256 -Value "$hash  sqywein.exe"
+          # Yeni kullanıcılar için kurulum dosyası (aynı exe, adı kurulum modunu açar).
+          Copy-Item sqywein.exe SqyweinSetup.exe
 
       - name: Yayınla
         env:
           GH_TOKEN: ${{ github.token }}
         shell: pwsh
-        run: gh release create "${{ github.ref_name }}" sqywein.exe sqywein.exe.sha256 --title "Sqywein ${{ github.ref_name }}" --generate-notes
+        run: gh release create "${{ github.ref_name }}" SqyweinSetup.exe sqywein.exe sqywein.exe.sha256 --title "Sqywein ${{ github.ref_name }}" --generate-notes

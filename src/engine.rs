@@ -20,20 +20,49 @@ use windows::core::Result;
 
 pub const WM_ENGINE: u32 = WM_APP + 1;
 
+/// A deferred popup request must always be completed, even if its tab closes.
+pub struct WindowRequest {
+    args: ICoreWebView2NewWindowRequestedEventArgs,
+    deferral: Option<ICoreWebView2Deferral>,
+}
+impl WindowRequest {
+    pub fn attach(mut self, view: &ICoreWebView2) -> Result<()> {
+        unsafe { self.args.SetNewWindow(view)?; self.args.SetHandled(true)?; }
+        if let Some(d) = self.deferral.take() { unsafe { d.Complete()?; } }
+        Ok(())
+    }
+}
+impl Drop for WindowRequest {
+    fn drop(&mut self) { if let Some(d) = self.deferral.take() { unsafe { let _ = d.Complete(); } } }
+}
+
+/// Registration completion is a barrier before attaching the new window.
+pub fn prepare_window(view: &ICoreWebView2, id: u32) {
+    let handler = AddScriptToExecuteOnDocumentCreatedCompletedHandler::create(Box::new(move |result, _| {
+        push(Event::WindowReady(id, result.is_ok())); Ok(())
+    }));
+    unsafe { if view.AddScriptToExecuteOnDocumentCreated(w!("void 0;"), &handler).is_err() { push(Event::WindowReady(id, false)); } }
+}
+
 pub enum Event {
     EnvReady(Option<ICoreWebView2Environment>),
     ViewReady(u32, Option<ICoreWebView2Controller>),
     /// Ana çerçevede yeni gezinme başladı (hedef adres).
     NavStarting(u32, String),
+    Suspended(u32, u64, bool),
+    SleepChecked(u32, u64, bool, bool),
     /// Sayfadaki sınıf ve kimlik adları (genel kozmetik kurallar için).
     Cosmetic(u32, Vec<String>, Vec<String>),
     /// Belge oluşurken çalışan betiğin kimliği: (sekme, yuva, kimlik).
-    ScriptAdded(u32, u8, String),
+    ScriptAdded(u32, u8, u64, String),
     NavCompleted(u32, bool, COREWEBVIEW2_WEB_ERROR_STATUS),
+    ExternalLaunch(u32),
     SourceChanged(u32),
     TitleChanged(u32),
     HistoryChanged(u32),
-    NewWindow(u32, String),
+    NewWindow(u32, String, Box<WindowRequest>),
+    WindowReady(u32, bool),
+    CloseRequested(u32),
     ProcessFailed(u32, COREWEBVIEW2_PROCESS_FAILED_KIND),
     Shortcut(u32),
     FullScreen(u32),
@@ -41,10 +70,12 @@ pub enum Event {
     /// Site simgesi: çözülmüş resim ve önbelleğe yazılacak PNG baytları.
     Favicon(u32, Option<Image>, Vec<u8>),
     /// Oturum çerezlerinin anlık görüntüsü (kapanırken saklanır).
-    Cookies(Vec<CookieData>),
+    Cookies(String, u64, Option<Vec<CookieData>>),
+    DataCleared(String, Option<u32>, bool),
     Zoom(u32),
     /// İç sayfadan gelen mesaj (JSON).
     WebMessage(u32, String),
+    PageReply(u32, String),
     /// Mağazadaki "Chrome'a ekle" düğmesine basıldı: uzantının mağaza kimliği.
     StoreInstall(String),
     /// Sayfadaki giriş formundan gelen mesaj: (sekme, çerçeve (iframe ise), belgenin adresi, JSON).
@@ -55,7 +86,7 @@ pub enum Event {
     /// Gizli hesap görünümünde çalıştırılan betiğin sonucu.
     Script(u32, String),
     Extensions(Vec<ExtensionInfo>),
-    ExtensionAdded(Option<String>),
+    ExtensionAdded(Option<ICoreWebView2BrowserExtension>),
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
@@ -85,7 +116,7 @@ pub enum Background {
     /// Arama önerileri (istek sırası, öneriler).
     Suggestions(u64, Vec<String>),
     /// Reklam engelleyici motoru (diskten ya da yeni derlenmiş).
-    Adblock(Option<Box<(crate::adblock::Engine, Option<crate::adblock::Engine>)>>, bool),
+    Adblock(Option<Box<(crate::adblock::Engine, Option<crate::adblock::Engine>)>>, bool, bool),
     /// Güncelleme denetiminin sonucu.
     Update(crate::update::Outcome),
     /// Windows Hello sonucu (istek kimliği, sonuç).
@@ -109,7 +140,7 @@ pub fn take_background() -> Vec<Background> {
 }
 
 thread_local! {
-    static QUEUE: RefCell<VecDeque<Event>> = RefCell::new(VecDeque::new());
+    static QUEUE: RefCell<VecDeque<Event>> = const { RefCell::new(VecDeque::new()) };
     static TARGET: Cell<HWND> = Cell::new(HWND::default());
 }
 
@@ -178,6 +209,24 @@ pub fn create_view(env: &ICoreWebView2Environment, parent: HWND, id: u32, profil
 }
 
 /// Yeni görünümün ayarları ve olay bağlantıları.
+/// Kapalı kalkanda dış istekleri süreçler arası Rust köprüsüne taşımayız.
+pub fn set_network_interception(view: &ICoreWebView2, enabled: bool) -> Result<()> {
+    unsafe {
+        let pattern = HSTRING::from("*");
+        if let Ok(v22) = view.cast::<ICoreWebView2_22>() {
+            let _ = v22.RemoveWebResourceRequestedFilterWithRequestSourceKinds(
+                &pattern, COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
+                COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_ALL);
+            if enabled { v22.AddWebResourceRequestedFilterWithRequestSourceKinds(&pattern,
+                COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL, COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_ALL)?; }
+        } else {
+            let _ = view.RemoveWebResourceRequestedFilter(&pattern, COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
+            if enabled { view.AddWebResourceRequestedFilter(&pattern, COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL)?; }
+        }
+        Ok(())
+    }
+}
+
 pub fn configure(ctrl: &ICoreWebView2Controller, id: u32, background: u32, prefs: &Settings) -> Result<ICoreWebView2> {
     unsafe {
         let view = ctrl.CoreWebView2()?;
@@ -202,6 +251,7 @@ pub fn configure(ctrl: &ICoreWebView2Controller, id: u32, background: u32, prefs
             let _ = s4.SetIsGeneralAutofillEnabled(prefs.autofill);
         }
         apply_tracking(&view, if prefs.privacy_shield { "strict" } else { &prefs.tracking });
+        apply_color_scheme(&view);
         // Sayfadaki sınıf/kimlik adlarını toplayıp genel gizleme kuralları için bildirir.
         let _ = view.AddScriptToExecuteOnDocumentCreated(
             &HSTRING::from(crate::adblock::COLLECTOR_SCRIPT),
@@ -209,7 +259,7 @@ pub fn configure(ctrl: &ICoreWebView2Controller, id: u32, background: u32, prefs
         );
         // Giriş formlarını tanıyıp şifre yöneticisiyle doldurur.
         let _ = view.AddScriptToExecuteOnDocumentCreated(
-            &HSTRING::from(include_str!("../ui/autofill.js")),
+            &HSTRING::from(include_str!("../ui/autofill.js").replace("/*__SQ_THEME__*/null", &crate::theme::message().to_string())),
             &AddScriptToExecuteOnDocumentCreatedCompletedHandler::create(Box::new(|_, _| Ok(()))),
         );
         // Mağazadaki "Chrome'a ekle" düğmesi bizim kurulumumuza bağlanır.
@@ -217,7 +267,14 @@ pub fn configure(ctrl: &ICoreWebView2Controller, id: u32, background: u32, prefs
             &HSTRING::from(STORE_SCRIPT),
             &AddScriptToExecuteOnDocumentCreatedCompletedHandler::create(Box::new(|_, _| Ok(()))),
         );
+        let _ = view.AddScriptToExecuteOnDocumentCreated(
+            &HSTRING::from(REST_GUARD),
+            &AddScriptToExecuteOnDocumentCreatedCompletedHandler::create(Box::new(|_, _| Ok(()))),
+        );
         set_download_folder(&view);
+        if !prefs.download_folder.is_empty() {
+            if let Some(p) = profile(&view) { let _ = p.SetDefaultDownloadFolderPath(&HSTRING::from(&prefs.download_folder)); }
+        }
         if prefs.privacy_shield {
             // Global Privacy Control ve Do Not Track: sitelere "verimi satma/paylaşma" sinyali.
             let script = "try{Object.defineProperty(Navigator.prototype,'globalPrivacyControl',{get:()=>true,configurable:true});\
@@ -229,16 +286,14 @@ pub fn configure(ctrl: &ICoreWebView2Controller, id: u32, background: u32, prefs
         }
 
         // İç sayfalar (sqywein://…) bellekten sunulur.
-        // Tüm istekler (iframe ve worker'lar dahil) engelleyiciden geçer; iç sayfalar
-        // da aynı yoldan bellekten sunulur.
-        match view.cast::<ICoreWebView2_22>() {
-            Ok(v22) => v22.AddWebResourceRequestedFilterWithRequestSourceKinds(
-                &HSTRING::from("*"),
-                COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
-                COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_ALL,
-            )?,
-            Err(_) => view.AddWebResourceRequestedFilter(&HSTRING::from("*"), COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL)?,
+        // Bu filtre gezinme sırasında hiç kaldırılmaz: sıradaki iç isteği kaçırmayız.
+        if let Ok(v22) = view.cast::<ICoreWebView2_22>() {
+            v22.AddWebResourceRequestedFilterWithRequestSourceKinds(&HSTRING::from("https://sqywein.ui/*"),
+                COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL, COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_ALL)?;
+        } else {
+            view.AddWebResourceRequestedFilter(&HSTRING::from("https://sqywein.ui/*"), COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL)?;
         }
+        set_network_interception(&view, prefs.adblock)?;
         let env = view.cast::<ICoreWebView2_2>()?.Environment()?;
         let mut token = Default::default();
         view.add_WebResourceRequested(
@@ -253,8 +308,7 @@ pub fn configure(ctrl: &ICoreWebView2Controller, id: u32, background: u32, prefs
                     match ui::file(&uri) {
                         // Ortak stil dosyası seçili vurgu rengiyle sunulur.
                         Some((body, mime)) if mime == "text/css" => {
-                            let accent = crate::theme::hex(crate::theme::accent());
-                            themed = String::from_utf8_lossy(body).replace("#AF85FC", &accent);
+                            themed = format!("{}\n{}", String::from_utf8_lossy(body), crate::theme::css());
                             (200, "OK", themed.as_bytes(), mime)
                         }
                         Some((body, mime)) => (200, "OK", body, mime),
@@ -287,11 +341,15 @@ pub fn configure(ctrl: &ICoreWebView2Controller, id: u32, background: u32, prefs
                 let mut json = PWSTR::null();
                 args.WebMessageAsJson(&mut json)?;
                 let json = take_pwstr(json);
+                let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) else { return Ok(()) };
+                if v["type"] == "sq.rest.result" {
+                    if let (Some(epoch), Some(discard), Some(safe)) = (v["epoch"].as_u64(), v["discard"].as_bool(), v["safe"].as_bool()) { push(Event::SleepChecked(id, epoch, discard, safe)); }
+                    return Ok(());
+                }
                 if url::is_internal(&source) {
                     push(Event::WebMessage(id, json));
                     return Ok(());
                 }
-                let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) else { return Ok(()) };
                 if v["type"].as_str().is_some_and(|t| t.starts_with("pw.")) {
                     push(Event::Password(id, None, source, json));
                 } else if v["type"] == "sq.cosmetic" {
@@ -379,7 +437,7 @@ pub fn configure(ctrl: &ICoreWebView2Controller, id: u32, background: u32, prefs
         }
 
         view.add_NavigationStarting(
-            &NavigationStartingEventHandler::create(Box::new(move |_, args| {
+            &NavigationStartingEventHandler::create(Box::new(move |sender, args| {
                 let mut uri = PWSTR::null();
                 if let Some(args) = args {
                     let _ = args.Uri(&mut uri);
@@ -387,6 +445,9 @@ pub fn configure(ctrl: &ICoreWebView2Controller, id: u32, background: u32, prefs
                 let uri = take_pwstr(uri);
                 // Engelleyici sayacı ve "bu sayfa" bilgisi istekler başlamadan güncellenir.
                 crate::adblock::set_page(id, &uri);
+                if let Some(view) = sender {
+                    set_network_interception(&view, crate::adblock::level_for(&uri) > crate::adblock::OFF)?;
+                }
                 crate::log::line(&format!("GEZİNME #{id} {uri}"));
                 push(Event::NavStarting(id, uri));
                 Ok(())
@@ -431,13 +492,21 @@ pub fn configure(ctrl: &ICoreWebView2Controller, id: u32, background: u32, prefs
                 if let Some(args) = args {
                     let mut uri = PWSTR::null();
                     args.Uri(&mut uri)?;
+                    let deferral = args.GetDeferral()?;
                     args.SetHandled(true)?;
-                    push(Event::NewWindow(id, take_pwstr(uri)));
+                    push(Event::NewWindow(id, take_pwstr(uri), Box::new(WindowRequest { args, deferral: Some(deferral) })));
                 }
                 Ok(())
             })),
             &mut token,
         )?;
+        view.add_WindowCloseRequested(&WindowCloseRequestedEventHandler::create(Box::new(move |_, _| { push(Event::CloseRequested(id)); Ok(()) })), &mut token)?;
+        if let Ok(v18) = view.cast::<ICoreWebView2_18>() {
+            v18.add_LaunchingExternalUriScheme(&LaunchingExternalUriSchemeEventHandler::create(Box::new(move |_, _| {
+                // WebView2'nin yerleşik onayını/Windows protokol işleyicisini koru.
+                push(Event::ExternalLaunch(id)); Ok(())
+            })), &mut token)?;
+        }
         view.add_ProcessFailed(
             &ProcessFailedEventHandler::create(Box::new(move |_, args| {
                 let mut kind = COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED;
@@ -494,14 +563,119 @@ pub fn flag(f: impl FnOnce(&mut BOOL) -> Result<()>) -> bool {
     f(&mut b).is_ok() && b.as_bool()
 }
 
+const REST_GUARD: &str = r#"(() => {
+  let edited = false, capture = false, unload = false, uploads = 0;
+  const listen = window.addEventListener;
+  window.addEventListener = function(type,...args) { if(type==='beforeunload')unload=true; return listen.call(this,type,...args); };
+  const fetch = window.fetch;
+  window.fetch = function(input,options) {
+    const method = (options?.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
+    if(['GET','HEAD','OPTIONS'].includes(method))return fetch.call(this,input,options);
+    uploads++; return fetch.call(this,input,options).finally(()=>uploads--);
+  };
+  const open = XMLHttpRequest.prototype.open, send = XMLHttpRequest.prototype.send;
+  const writing = new WeakSet();
+  XMLHttpRequest.prototype.open = function(method,...args) { if(!['GET','HEAD','OPTIONS'].includes(String(method).toUpperCase()))writing.add(this); return open.call(this,method,...args); };
+  XMLHttpRequest.prototype.send = function(...args) { if(writing.has(this)){uploads++;this.addEventListener('loadend',()=>uploads--,{once:true});}return send.apply(this,args); };
+  document.addEventListener('input', () => { edited = true; }, true);
+  document.addEventListener('change', () => { edited = true; }, true);
+  const liveTracks = new Set(), peers = new Set(), connections = new Set();
+  for (const name of ['WebSocket','EventSource']) if (window[name]) {
+    const Original = window[name];
+    window[name] = new Proxy(Original, {construct(target,args) {
+      const connection=Reflect.construct(target,args);connections.add(connection);
+      const release=()=>{if(connection.readyState===connection.CLOSED)connections.delete(connection);};
+      connection.addEventListener?.('close',release,{once:true});
+      connection.addEventListener?.('error',release);
+      const close=connection.close;
+      connection.close=function(...args){try{return close.apply(this,args);}finally{if(this.readyState===this.CLOSED)connections.delete(this);}};
+      return connection;
+    }});
+  }
+  let captureRequests = 0;
+  if (navigator.mediaDevices) for (const name of ['getUserMedia','getDisplayMedia']) {
+    const original = navigator.mediaDevices[name];
+    if (original) navigator.mediaDevices[name] = function(...args) {
+      captureRequests++;
+      let result;try{result=original.apply(this,args);}catch(error){captureRequests--;throw error;}
+      return result.then(stream=>{if(stream.getTracks)for(const track of stream.getTracks()){
+        liveTracks.add(track);track.addEventListener?.('ended',()=>liveTracks.delete(track),{once:true});
+        const stop=track.stop;
+        if(stop)track.stop=function(...args){try{return stop.apply(this,args);}finally{if(this.readyState==='ended')liveTracks.delete(this);}};
+      }else capture=true;return stream;}).finally(()=>captureRequests--);
+    };
+  }
+  if (window.RTCPeerConnection) {
+    const Original = window.RTCPeerConnection;
+    window.RTCPeerConnection = new Proxy(Original, {construct(target,args) {
+      const peer=Reflect.construct(target,args);peers.add(peer);
+      const release=()=>{if(peer.signalingState==='closed'||peer.connectionState==='closed')peers.delete(peer);};
+      peer.addEventListener('connectionstatechange',release);
+      const close=peer.close;
+      peer.close=function(...args){try{return close.apply(this,args);}finally{if(this.signalingState==='closed')peers.delete(this);}};
+      return peer;
+    }});
+  }
+  const localSafe = () => {
+    for(const track of liveTracks)if(track.readyState==='ended')liveTracks.delete(track);
+    for(const peer of peers)if(peer.signalingState==='closed' || peer.connectionState==='closed')peers.delete(peer);
+    for(const connection of connections)if(connection.readyState===connection.CLOSED)connections.delete(connection);
+    return !edited && !capture && !unload && uploads === 0 && captureRequests === 0 && !liveTracks.size && !peers.size &&
+    !connections.size && !window.onbeforeunload && ![...document.querySelectorAll('video,audio')].some(m => !m.paused && !m.ended);
+  };
+  let serial = 0;
+  const inspect = async () => {
+    if(!localSafe())return false;
+    const children=[...document.querySelectorAll('iframe,frame')];
+    const results=await Promise.all(children.map(frame=>new Promise(resolve=>{
+      const child=frame.contentWindow;if(!child){resolve(false);return;}
+      const request=`${Date.now()}-${++serial}-${Math.random()}`;
+      let timer;
+      const finish=safe=>{clearTimeout(timer);window.removeEventListener('message',receive);resolve(safe);};
+      const receive=event=>{if(event.source===child && event.data?.type==='__sqRestReply' && event.data.request===request)finish(event.data.safe===true);};
+      listen.call(window,'message',receive);
+      timer=setTimeout(()=>finish(false),1200);
+      child.postMessage({type:'__sqRestQuery',request},'*');
+    })));
+    return localSafe() && results.every(Boolean);
+  };
+  listen.call(window,'message',event=>{
+    if(event.source!==window.parent || event.source===window || event.data?.type!=='__sqRestQuery' || typeof event.data.request!=='string' || event.data.request.length>100)return;
+    const request=event.data.request, parent=event.source;
+    inspect().then(safe=>parent.postMessage({type:'__sqRestReply',request,safe},'*'));
+  });
+  Object.defineProperty(window,'__sqCheckRest',{value:inspect});
+  Object.defineProperty(window,'__sqCanRest',{get:()=>localSafe() && !document.querySelector('iframe,frame')});
+})();"#;
+
+pub fn check_rest(view: &ICoreWebView2, id: u32, epoch: u64, discard: bool) {
+    wake(view);
+    let script = format!("(()=>{{const done=safe=>window.chrome.webview.postMessage({{type:'sq.rest.result',epoch:{epoch},discard:{discard},safe:!!safe}});if(typeof window.__sqCheckRest==='function')window.__sqCheckRest().then(done,()=>done(false));else done(false);}})();");
+    let handler = ExecuteScriptCompletedHandler::create(Box::new(move |result, _| {
+        if result.is_err() { push(Event::SleepChecked(id, epoch, discard, false)); }
+        Ok(())
+    }));
+    unsafe {
+        if view.ExecuteScript(&HSTRING::from(script), &handler).is_err() {
+            push(Event::SleepChecked(id, epoch, discard, false));
+        }
+    }
+}
+
 /// Arka plandaki sekme: düşük bellek hedefi ve dondurma.
-pub fn doze(view: &ICoreWebView2) {
+pub fn doze(view: &ICoreWebView2, id: u32, epoch: u64) {
     unsafe {
         if let Ok(v19) = view.cast::<ICoreWebView2_19>() {
             let _ = v19.SetMemoryUsageTargetLevel(COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW);
         }
         if let Ok(v3) = view.cast::<ICoreWebView2_3>() {
-            let _ = v3.TrySuspend(&TrySuspendCompletedHandler::create(Box::new(|_, _| Ok(()))));
+            let result = v3.TrySuspend(&TrySuspendCompletedHandler::create(Box::new(move |result, success| {
+                push(Event::Suspended(id, epoch, result.is_ok() && success));
+                Ok(())
+            })));
+            if result.is_err() { push(Event::Suspended(id, epoch, false)); }
+        } else {
+            push(Event::Suspended(id, epoch, false));
         }
     }
 }
@@ -582,6 +756,12 @@ pub fn describe_error(status: COREWEBVIEW2_WEB_ERROR_STATUS) -> Option<&'static 
     })
 }
 
+pub fn apply_color_scheme(view: &ICoreWebView2) {
+    if let Some(profile) = profile(view) { unsafe {
+        let _ = profile.SetPreferredColorScheme(if crate::theme::is_dark() { COREWEBVIEW2_PREFERRED_COLOR_SCHEME_DARK } else { COREWEBVIEW2_PREFERRED_COLOR_SCHEME_LIGHT });
+    } }
+}
+
 pub fn apply_tracking(view: &ICoreWebView2, level: &str) {
     let level = match level {
         "basic" => COREWEBVIEW2_TRACKING_PREVENTION_LEVEL_BASIC,
@@ -625,7 +805,7 @@ pub fn run_script(view: &ICoreWebView2, id: u32, script: &str) {
 }
 
 /// Tarama verilerini temizler: "history", "cookies", "cache".
-pub fn clear_data(view: &ICoreWebView2, kinds: &[String]) {
+pub fn clear_data(view: &ICoreWebView2, kinds: &[String], owner: String, tab: Option<u32>) {
     let mut k = COREWEBVIEW2_BROWSING_DATA_KINDS(0);
     for kind in kinds {
         k.0 |= match kind.as_str() {
@@ -636,7 +816,7 @@ pub fn clear_data(view: &ICoreWebView2, kinds: &[String]) {
         };
     }
     if let Some(p2) = profile(view).and_then(|p| p.cast::<ICoreWebView2Profile2>().ok()) {
-        let handler = ClearBrowsingDataCompletedHandler::create(Box::new(|_| Ok(())));
+        let handler = ClearBrowsingDataCompletedHandler::create(Box::new(move |result| { push(Event::DataCleared(owner.clone(), tab, result.is_ok())); Ok(()) }));
         unsafe { let _ = p2.ClearBrowsingData(k, &handler); }
     }
 }
@@ -675,14 +855,10 @@ pub fn add_extension(view: &ICoreWebView2, folder: &std::path::Path) {
         return;
     };
     let handler = ProfileAddBrowserExtensionCompletedHandler::create(Box::new(|result, ext| {
-        let id = match (result.is_ok(), ext) {
-            (true, Some(ext)) => Some(string(|p| unsafe { ext.Id(p) })),
-            _ => None,
-        };
-        push(Event::ExtensionAdded(id));
+        push(Event::ExtensionAdded(if result.is_ok() { ext } else { None }));
         Ok(())
     }));
-    unsafe { let _ = p7.AddBrowserExtension(&HSTRING::from(folder.as_os_str()), &handler); }
+    unsafe { if p7.AddBrowserExtension(&HSTRING::from(folder.as_os_str()), &handler).is_err() { push(Event::ExtensionAdded(None)); } }
 }
 
 pub fn enable_extension(ext: &ICoreWebView2BrowserExtension, on: bool) {
@@ -762,9 +938,13 @@ fn read_stream(stream: &IStream) -> Vec<u8> {
 // ---------- Çerezler ----------
 
 /// Oturum çerezlerini (süresiz olanları) toplar; sonuç `Event::Cookies` ile gelir.
-pub fn snapshot_session_cookies(view: &ICoreWebView2) {
-    let Ok(manager) = view.cast::<ICoreWebView2_2>().and_then(|v| unsafe { v.CookieManager() }) else { return };
-    let handler = GetCookiesCompletedHandler::create(Box::new(|result, list| {
+pub fn snapshot_session_cookies(view: &ICoreWebView2, profile: String, generation: u64) -> bool {
+    let Ok(manager) = view.cast::<ICoreWebView2_2>().and_then(|v| unsafe { v.CookieManager() }) else { return false };
+    let handler = GetCookiesCompletedHandler::create(Box::new(move |result, list| {
+        if result.is_err() || list.is_none() {
+            push(Event::Cookies(profile.clone(), generation, None));
+            return Ok(());
+        }
         let mut out = Vec::new();
         if let (true, Some(list)) = (result.is_ok(), list) {
             let mut count = 0u32;
@@ -789,10 +969,10 @@ pub fn snapshot_session_cookies(view: &ICoreWebView2) {
                 }
             }
         }
-        push(Event::Cookies(out));
+        push(Event::Cookies(profile.clone(), generation, Some(out)));
         Ok(())
     }));
-    unsafe { let _ = manager.GetCookies(&HSTRING::new(), &handler); }
+    unsafe { manager.GetCookies(&HSTRING::new(), &handler).is_ok() }
 }
 
 /// Kayıtlı oturum çerezlerini geri koyar (sayfa açılmadan önce).
@@ -836,7 +1016,7 @@ const STORE_SCRIPT: &str = r#"(() => {
 })();"#;
 
 /// İndirmeler kullanıcının "İndirilenler" klasörüne gider.
-fn set_download_folder(view: &ICoreWebView2) {
+pub fn set_download_folder(view: &ICoreWebView2) {
     use windows::Win32::UI::Shell::{FOLDERID_Downloads, SHGetKnownFolderPath, KF_FLAG_DEFAULT};
     let Some(p) = profile(view) else { return };
     unsafe {
@@ -849,10 +1029,10 @@ fn set_download_folder(view: &ICoreWebView2) {
 }
 
 /// Belge oluşurken çalışacak betik ekler; kimliği `Event::ScriptAdded` ile gelir.
-pub fn add_document_script(view: &ICoreWebView2, tab: u32, slot: u8, script: &str) {
+pub fn add_document_script(view: &ICoreWebView2, tab: u32, slot: u8, generation: u64, script: &str) {
     let handler = AddScriptToExecuteOnDocumentCreatedCompletedHandler::create(Box::new(move |result, id| {
         if result.is_ok() {
-            push(Event::ScriptAdded(tab, slot, id));
+            push(Event::ScriptAdded(tab, slot, generation, id));
         }
         Ok(())
     }));
@@ -866,4 +1046,40 @@ pub fn remove_document_script(view: &ICoreWebView2, id: &str) {
 pub fn execute(view: &ICoreWebView2, script: &str) {
     let handler = ExecuteScriptCompletedHandler::create(Box::new(|_, _| Ok(())));
     unsafe { let _ = view.ExecuteScript(&HSTRING::from(script), &handler); }
+}
+
+/// Permission exceptions come from WebView2's real profile store.
+pub fn list_permissions(view: &ICoreWebView2, tab: u32) {
+    let Some(p) = profile(view).and_then(|p| p.cast::<ICoreWebView2Profile4>().ok()) else { return };
+    let handler = GetNonDefaultPermissionSettingsCompletedHandler::create(Box::new(move |result, list| {
+        let mut items = Vec::new();
+        if let (true, Some(list)) = (result.is_ok(), list) { unsafe {
+            let mut count = 0; let _ = list.Count(&mut count);
+            for i in 0..count {
+                if let Ok(item) = list.GetValueAtIndex(i) {
+                    let mut kind = COREWEBVIEW2_PERMISSION_KIND_UNKNOWN_PERMISSION;
+                    let mut state = COREWEBVIEW2_PERMISSION_STATE_DEFAULT;
+                    let _ = item.PermissionKind(&mut kind); let _ = item.PermissionState(&mut state);
+                    let origin = string(|p| item.PermissionOrigin(p));
+                    items.push(serde_json::json!({"origin":origin,"kind":kind.0,"state":state.0}));
+                }
+            }
+        }}
+        push(Event::PageReply(tab, serde_json::json!({"type":"permissions.list","items":items}).to_string()));
+        Ok(())
+    }));
+    unsafe { let _ = p.GetNonDefaultPermissionSettings(&handler); }
+}
+pub fn set_permission(view: &ICoreWebView2, tab: u32, origin: &str, kind: i32, state: i32) {
+    let Some(p) = profile(view).and_then(|p| p.cast::<ICoreWebView2Profile4>().ok()) else { return };
+    let v = view.clone();
+    let handler = SetPermissionStateCompletedHandler::create(Box::new(move |result| {
+        if result.is_ok() { list_permissions(&v, tab); }
+        Ok(())
+    }));
+    unsafe { let _ = p.SetPermissionState(COREWEBVIEW2_PERMISSION_KIND(kind), &HSTRING::from(origin), COREWEBVIEW2_PERMISSION_STATE(state), &handler); }
+}
+
+pub fn set_muted(view: &ICoreWebView2, muted: bool) {
+    if let Ok(v) = view.cast::<ICoreWebView2_8>() { unsafe { let _ = v.SetIsMuted(muted); } }
 }

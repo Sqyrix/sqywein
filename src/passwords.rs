@@ -1,7 +1,7 @@
 //! Profil başına DPAPI ile şifrelenen parola kasası.
 
 use serde::{Deserialize, Serialize};
-use std::{fs, io, net::IpAddr, path::PathBuf};
+use std::{fs, io, path::PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Credential {
@@ -119,20 +119,26 @@ impl Vault {
                 if page.starts_with("http://") && c.origin.starts_with("https://") {
                     return false;
                 }
-                let other = site(&c.origin);
-                other == host || domain(&other) == domain(&host)
+                c.origin == page || same_site(&c.origin, &page)
             })
             .collect();
         items.sort_by_key(|c| {
             (
-                site(&c.origin) != host,
                 c.origin != page,
+                // "www." farkı yakın sayılır: www.example.com'da example.com önce gelir.
+                site(&c.origin).trim_start_matches("www.") != host.trim_start_matches("www."),
                 std::cmp::Reverse(&c.last_used),
                 fold(&c.username),
                 c.id,
             )
         });
         items
+    }
+
+    /// Yalnızca birebir bu adres için kayıtlı hesaplar (kaydet/güncelle sorusu için).
+    pub fn exact(&self, page_url: &str) -> Vec<&Credential> {
+        let page = origin(page_url);
+        self.matches(page_url).into_iter().filter(|c| Some(&c.origin) == page.as_ref()).collect()
     }
 
     pub fn upsert(&mut self, page_url: &str, username: &str, password: &str) -> Upsert {
@@ -402,25 +408,30 @@ fn site(origin: &str) -> String {
     }
     authority.split(':').next().unwrap_or(authority).to_owned()
 }
-fn domain(host: &str) -> String {
-    if host.parse::<IpAddr>().is_ok() {
-        return host.into();
+/// Aynı kayıtlı alan adı mı? ("login.example.com" ile "www.example.com" evet.)
+/// Genel son ekler listesi kullanılır: "alice.github.io" ile "bob.github.io",
+/// farklı kişilerin siteleri oldukları için eşleşmez. IP adresleri yalnızca
+/// birebir eşleşir; şema da aynı olmalıdır.
+fn same_site(a: &str, b: &str) -> bool {
+    let scheme = |o: &str| o.split_once("://").map(|(s, _)| s.to_owned());
+    if scheme(a) != scheme(b) {
+        return false;
     }
-    let labels: Vec<_> = host.split('.').collect();
-    let count = if labels.len() >= 3
-        && labels.last().is_some_and(|s| s.len() == 2)
-        && [
-            "com", "net", "org", "gov", "edu", "co", "ac", "k12", "gen", "bel", "web", "biz",
-            "info", "tv",
-        ]
-        .contains(&labels[labels.len() - 2])
-    {
-        3
-    } else {
-        2
-    };
-    labels[labels.len().saturating_sub(count)..].join(".")
+    let (ha, hb) = (site(a), site(b));
+    if ha.parse::<std::net::IpAddr>().is_ok() || hb.parse::<std::net::IpAddr>().is_ok() {
+        return false;
+    }
+    match (psl::domain_str(&ha), psl::domain_str(&hb)) {
+        (Some(da), Some(db)) => da == db,
+        _ => false,
+    }
 }
+
+/// Öneri listesinde gösterilecek adres ("www." olmadan).
+pub fn display_site(origin: &str) -> String {
+    site(origin).trim_start_matches("www.").to_owned()
+}
+
 fn csv_quote(s: &str) -> String {
     if s.contains([',', '"', '\r', '\n']) {
         format!("\"{}\"", s.replace('"', "\"\""))
@@ -550,11 +561,22 @@ adobe.com,https://account.adobe.com/,emir@ornek.com,d1,
             v.upsert(url, "u", "p");
         }
         let m = v.matches("https://a.example.com/login");
-        assert_eq!(m.len(), 3);
+        // Birebir eşleşen önce, aynı sitenin diğer adresleri sonra; http'ye https şifresi verilmez.
+        assert_eq!(m.len(), 2);
         assert_eq!(m[0].origin, "https://a.example.com");
-        assert_eq!(m[1].origin, "http://a.example.com");
+        assert_eq!(m[1].origin, "https://example.com");
+        assert_eq!(v.exact("https://a.example.com/login").len(), 1);
         assert_eq!(v.matches("http://a.example.com").len(), 1);
-        assert_eq!(v.matches("https://www.turkiye.gov.tr").len(), 1);
+        assert_eq!(v.matches("https://www.example.com")[0].origin, "https://example.com");
+        // turkiye.gov.tr ortak; gov.tr ise genel son ek: b.gov.tr eşleşmez.
+        let gov = v.matches("https://www.turkiye.gov.tr");
+        assert_eq!(gov.len(), 1);
+        assert_eq!(gov[0].origin, "https://giris.turkiye.gov.tr");
+        // Paylaşılan barındırma: farklı kişilerin siteleri ayrı tutulur.
+        v.upsert("https://alice.github.io", "alice", "secret");
+        assert!(v.matches("https://bob.github.io").is_empty());
+        assert_eq!(v.matches("https://alice.github.io/repo").len(), 1);
+        assert_eq!(display_site("https://www.example.com:8443"), "example.com");
         assert_eq!(v.matches("https://evil-example.com").len(), 0);
         assert_eq!(v.matches("https://127.0.0.1").len(), 1);
         assert!(v.matches("android://hash@com.example").is_empty());

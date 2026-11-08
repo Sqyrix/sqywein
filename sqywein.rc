@@ -1,2 +1,29 @@
 1 ICON "Assets/app.ico"
 1 24 "sqywein.manifest"
+
+1 VERSIONINFO
+ FILEVERSION SQYWEIN_FILE_VERSION
+ PRODUCTVERSION SQYWEIN_FILE_VERSION
+ FILEFLAGSMASK 0x3fL
+ FILEFLAGS 0x0L
+ FILEOS 0x40004L
+ FILETYPE 0x1L
+ FILESUBTYPE 0x0L
+BEGIN
+ BLOCK "StringFileInfo"
+ BEGIN
+  BLOCK "040904B0"
+  BEGIN
+   VALUE "FileDescription", "Sqywein\0"
+   VALUE "ProductName", "Sqywein\0"
+   VALUE "OriginalFilename", "sqywein.exe\0"
+   VALUE "InternalName", "sqywein\0"
+   VALUE "FileVersion", SQYWEIN_VERSION
+   VALUE "ProductVersion", SQYWEIN_VERSION
+  END
+ END
+ BLOCK "VarFileInfo"
+ BEGIN
+  VALUE "Translation", 0x0409, 1200
+ END
+END

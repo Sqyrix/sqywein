@@ -33,8 +33,16 @@ pub fn to_url(text: &str) -> Option<String> {
 
 pub fn to_url_with(text: &str, search: &str) -> Option<String> {
     let text = text.trim();
-    if text.is_empty() {
+    if text.is_empty() || text.chars().any(char::is_control) {
         return None;
+    }
+    let drive_path = text.as_bytes().get(1) == Some(&b':') && matches!(text.as_bytes().get(2), Some(b'\\' | b'/'));
+    if drive_path || text.starts_with(r"\\") {
+        use windows::{core::{HSTRING, PWSTR}, Win32::UI::Shell::UrlCreateFromPathW};
+        let mut value = vec![0u16; 32768]; let mut len = value.len() as u32;
+        if unsafe { UrlCreateFromPathW(&HSTRING::from(text), PWSTR(value.as_mut_ptr()), &mut len, 0) }.is_err() { return None; }
+        let end = value.iter().position(|c| *c == 0).unwrap_or(value.len());
+        return Some(String::from_utf16_lossy(&value[..end]));
     }
     if let Some(rest) = text.strip_prefix("sqywein://") {
         // "sqywein://passwords#import" gibi bir bölüm adresi de korunur.
@@ -46,6 +54,7 @@ pub fn to_url_with(text: &str, search: &str) -> Option<String> {
         }
     }
     if let Some((scheme, rest)) = text.split_once("://") {
+        if matches!(scheme.to_ascii_lowercase().as_str(), "javascript" | "vbscript" | "data") { return None; }
         if !rest.is_empty() && is_scheme(scheme) && !text.contains(char::is_whitespace) {
             return Some(text.to_string());
         }
@@ -54,9 +63,26 @@ pub fn to_url_with(text: &str, search: &str) -> Option<String> {
     if lower.starts_with("about:") || lower.starts_with("edge://") {
         return Some(text.to_string());
     }
-    let is_local = lower.starts_with("localhost");
+    let authority = lower.split(['/', '?', '#']).next().unwrap_or(&lower);
+    let hostname = if authority.starts_with('[') { authority.split_once(']').map_or(authority, |(h,_)| &h[1..]) }
+        else { authority.split(':').next().unwrap_or(authority) };
+    let local_ip = hostname.parse::<std::net::IpAddr>().is_ok_and(|ip| match ip {
+        std::net::IpAddr::V4(v) => v.is_private() || v.is_loopback() || v.is_link_local() || v.is_unspecified(),
+        std::net::IpAddr::V6(v) => v.is_loopback() || v.is_unique_local() || v.is_unicast_link_local() || v.is_unspecified(),
+    });
+    let host_port = authority.rsplit_once(':').is_some_and(|(_,p)| !p.is_empty() && p.bytes().all(|c| c.is_ascii_digit()));
+    let is_local = hostname == "localhost" || hostname.ends_with(".localhost") || hostname.ends_with(".local") || local_ip
+        || (host_port && !hostname.contains('.') && !authority.starts_with('['));
+    if !is_local && !host_port {
+        if let Some((scheme, rest)) = text.split_once(':') {
+            if is_scheme(scheme) && !rest.is_empty() && !text.contains(char::is_whitespace) {
+                if matches!(scheme.to_ascii_lowercase().as_str(), "javascript" | "vbscript" | "data") { return None; }
+                return Some(text.to_owned());
+            }
+        }
+    }
     let looks_like_host = !text.contains(char::is_whitespace)
-        && (is_local || (text.contains('.') && !text.starts_with('.') && !text.ends_with('.')));
+        && (is_local || authority.starts_with('[') || (text.contains('.') && !text.starts_with('.') && !text.ends_with('.')));
     if looks_like_host {
         return Some(format!("{}{}", if is_local { "http://" } else { "https://" }, text));
     }
@@ -100,6 +126,20 @@ mod tests {
         assert_eq!(to_url("localhost:3000").unwrap(), "http://localhost:3000");
         assert_eq!(to_url("about:blank").unwrap(), "about:blank");
         assert!(to_url("   ").is_none());
+    }
+
+    #[test]
+    fn desktop_files_and_local_networks_do_not_become_searches_or_https() {
+        assert_eq!(to_url("192.168.1.1/login").unwrap(), "http://192.168.1.1/login");
+        assert_eq!(to_url("127.0.0.1:4545/callback?state=a%2Bb").unwrap(), "http://127.0.0.1:4545/callback?state=a%2Bb");
+        assert_eq!(to_url("[::1]:8080/callback").unwrap(), "http://[::1]:8080/callback");
+        assert_eq!(to_url("router.local/login").unwrap(), "http://router.local/login");
+        assert_eq!(to_url("localhost.evil.com").unwrap(), "https://localhost.evil.com");
+        assert_eq!(to_url("http://www.msftconnecttest.com/redirect").unwrap(), "http://www.msftconnecttest.com/redirect");
+        assert_eq!(to_url("mailto:user@example.com").unwrap(), "mailto:user@example.com");
+        let file = to_url(r"C:\Users\Test User\giriş.html").unwrap();
+        assert!(file.starts_with("file:///C:/Users/")); assert!(!file.contains(' '));
+        assert!(to_url("javascript:alert(1)").is_none());
     }
 
     #[test]

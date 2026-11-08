@@ -19,7 +19,7 @@ pub(super) enum Gate {
     Reveal(u64),
     Export,
     /// Sayfadaki formu doldur: (yanıt gidecek çerçeve, belgenin adresi, hesap).
-    Fill(Option<ICoreWebView2Frame>, String, u64),
+    Fill(Option<ICoreWebView2Frame>, String, u64, String),
 }
 
 /// Kaydedilmeyi bekleyen giriş: (sayfa adresi, kullanıcı adı, şifre, güncelleme mi).
@@ -61,15 +61,16 @@ impl App {
         }
         match msg["type"].as_str().unwrap_or("") {
             "pw.query" => {
-                let accounts: Vec<Value> = self.vault.matches(source).iter().map(|c| json!({ "id": c.id, "username": c.username })).collect();
+                let accounts: Vec<Value> = self.vault.matches(source).iter().map(|c| json!({ "id": c.id, "username": c.username, "site": crate::passwords::display_site(&c.origin) })).collect();
                 if !accounts.is_empty() {
-                    send(self, json!({ "type": "pw.accounts", "accounts": accounts }));
+                    send(self, json!({ "type": "pw.accounts", "accounts": accounts, "theme":crate::theme::message() }));
                 }
             }
             "pw.fill" => {
                 // Kullanıcı listeden hesap seçti: Windows Hello ile doğrulanınca doldurulur.
                 let id = msg["id"].as_u64().unwrap_or(0);
-                self.gate(tab_id, Gate::Fill(frame.clone(), source.to_string(), id));
+                let Some(token) = msg["documentToken"].as_str().filter(|s| s.len() <= 64) else { return };
+                self.gate(tab_id, Gate::Fill(frame.clone(), source.to_string(), id, token.to_string()));
             }
             "pw.manage" => self.open_page("passwords"),
             "pw.submitted" => {
@@ -78,7 +79,8 @@ impl App {
                 if password.is_empty() || self.vault.never(source) {
                     return;
                 }
-                let existing = self.vault.matches(source);
+                // Kaydet/güncelle sorusu yalnızca bu adresin hesaplarına bakar.
+                let existing = self.vault.exact(source);
                 if existing.iter().any(|c| c.username == username && c.password == password) {
                     return; // Zaten kayıtlı.
                 }
@@ -118,7 +120,7 @@ impl App {
 
     fn favicon_url(&self, origin: &str) -> String {
         let host = url::host(origin).to_string();
-        if let Some(hit) = self.favicon_urls.borrow().get(&host) {
+        if let Some(hit) = self.favicon_urls.borrow_mut().get(&host) {
             return hit.clone();
         }
         let url = self.icon_for(origin).map(|img| crate::image::to_data_url(&img)).unwrap_or_default();
@@ -209,17 +211,33 @@ impl App {
     }
 
     fn fulfil(&mut self, tab_id: u32, action: Gate) {
+        let Some(tab) = self.index_of(tab_id).map(|i| &self.tabs[i]) else { return };
+        // Never send secrets to a document which navigated while Hello was open.
+        let Some(view) = tab.view.as_ref() else { return };
+        let current = engine::string(|p| unsafe { view.Source(p) });
+        match &action {
+            Gate::Fill(None, source, _, _) if source != &current => return,
+            // Frame navigation cannot be authenticated with the top-level Source.
+            // Use the document-bound script below instead of a frame-wide message.
+            Gate::Reveal(_) | Gate::Export if current.split(['?', '#']).next() != Some(url::internal("passwords").as_str()) => return,
+            _ => {}
+        }
         match action {
-            Gate::Fill(frame, source, id) => {
+            Gate::Fill(frame, source, id, token) => {
                 // Yalnızca bu sayfayla eşleşen bir hesabın şifresi verilir.
                 let found = self.vault.matches(&source).iter().find(|c| c.id == id).map(|c| (c.username.clone(), c.password.clone()));
                 let Some((username, password)) = found else { return };
                 self.vault.touch(id);
                 self.save_vault();
-                let msg = json!({ "type": "pw.secret", "id": id, "username": username, "password": password });
-                match frame.and_then(|f| f.cast::<ICoreWebView2Frame2>().ok()) {
-                    Some(f2) => unsafe { let _ = f2.PostWebMessageAsJson(&HSTRING::from(msg.to_string())); },
-                    None => self.reply(tab_id, msg),
+                let msg = json!({ "type": "pw.secret", "documentToken": token, "id": id, "username": username, "password": password });
+                let script = format!("if(window.__sqPwDocument==={} && location.href==={})window.dispatchEvent(new MessageEvent('sq-password',{{data:{}}}));", serde_json::to_string(&token).unwrap(), serde_json::to_string(&source).unwrap(), msg);
+                match frame {
+                    Some(f) => {
+                        if let Ok(f2) = f.cast::<ICoreWebView2Frame2>() {
+                            unsafe { let _ = f2.ExecuteScript(&HSTRING::from(script), &webview2_com::ExecuteScriptCompletedHandler::create(Box::new(|_, _| Ok(())))); }
+                        }
+                    }
+                    None => if let Some(v) = self.index_of(tab_id).and_then(|i| self.tabs[i].view.as_ref()) { engine::execute(v, &script); },
                 }
             }
             Gate::Reveal(id) => {

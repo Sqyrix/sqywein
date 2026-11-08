@@ -18,6 +18,12 @@ pub(super) struct Drag {
 const TIP_ID: usize = 1;
 
 impl App {
+    pub(super) fn request_manual_sleep(&mut self, i: usize) {
+        if i == self.active { return; }
+        if let Some(t) = self.tabs.get_mut(i) {
+            if let Some(v) = &t.view { t.sleep_check = true; t.sleep_discard = true; engine::check_rest(v, t.id, t.epoch, true); }
+        }
+    }
     // ---------- Sağ tık menüsü ----------
 
     pub(super) fn open_tab_menu(&mut self, i: usize) {
@@ -48,6 +54,8 @@ impl App {
             Item::Sep,
             Item::act("Yeniden yükle", "Ctrl+R", MenuCmd::TabReload),
             Item::act("Çoğalt", "", MenuCmd::TabDuplicate),
+            Item::act(if t.pinned { "Sabitlemeyi kaldır" } else { "Sekmeyi sabitle" }, "", MenuCmd::TabPin),
+            Item::act(if t.muted { "Sekmenin sesini aç" } else { "Sekmeyi sessize al" }, "", MenuCmd::TabMute),
             sleep,
             Item::act("Diğer sekmeleri uyut", "", MenuCmd::TabSleepOthers),
             Item::Sep,
@@ -61,8 +69,19 @@ impl App {
         let Some(i) = self.index_of(self.context_tab) else { return };
         let id = self.tabs[i].id;
         match cmd {
+            MenuCmd::TabMute => {
+                self.tabs[i].muted = !self.tabs[i].muted;
+                if let Some(v) = &self.tabs[i].view { engine::set_muted(v, self.tabs[i].muted); }
+            }
+            MenuCmd::TabPin => {
+                let active_id = self.tabs[self.active].id;
+                self.tabs[i].pinned = !self.tabs[i].pinned;
+                self.tabs.sort_by_key(|t| !t.pinned);
+                self.active = self.index_of(active_id).unwrap_or(0);
+                self.layout_children();
+            }
             MenuCmd::TabNewRight => {
-                let at = i + 1;
+                let at = (i + 1).max(self.tabs.iter().filter(|t| t.pinned).count());
                 let tab = Tab::new(self.next_id, String::new(), String::new());
                 self.next_id += 1;
                 self.tabs.insert(at, tab);
@@ -85,24 +104,25 @@ impl App {
                 self.insert_tab(url, Some(id), private);
             }
             MenuCmd::TabSleep => {
-                self.tabs[i].close_view();
+                self.request_manual_sleep(i);
             }
             MenuCmd::TabSleepOthers => {
                 for (k, t) in self.tabs.iter_mut().enumerate() {
                     if k != self.active && k != i {
-                        t.close_view();
+                        if let Some(v) = &t.view { t.sleep_check = true; t.sleep_discard = true; engine::check_rest(v, t.id, t.epoch, true); }
                     }
                 }
             }
             MenuCmd::TabCloseOthers => {
                 let keep = id;
-                while let Some(k) = self.tabs.iter().position(|t| t.id != keep) {
+                while let Some(k) = self.tabs.iter().position(|t| t.id != keep && !t.pinned) {
                     self.close_tab(k);
                 }
             }
             MenuCmd::TabCloseRight => {
-                while let Some(k) = self.index_of(id).filter(|k| k + 1 < self.tabs.len()) {
-                    self.close_tab(k + 1);
+                while let Some(start) = self.index_of(id) {
+                    let Some(k) = (start + 1..self.tabs.len()).find(|k| !self.tabs[*k].pinned) else { break };
+                    self.close_tab(k);
                 }
             }
             MenuCmd::TabClose => self.close_tab(i),
@@ -133,6 +153,8 @@ impl App {
         let l = self.layout();
         // İmlecin üstünde durduğu yuva; uçlarda ilk/son sekmeye sabitlenir.
         let to = l.tabs.iter().position(|r| x < r.right()).unwrap_or(l.tabs.len().saturating_sub(1)).min(self.tabs.len() - 1);
+        let pins = self.tabs.iter().filter(|t| t.pinned).count();
+        let to = if self.tabs[from].pinned { to.min(pins.saturating_sub(1)) } else { to.max(pins) };
         if to != from {
             let tab = self.tabs.remove(from);
             self.tabs.insert(to, tab);
@@ -177,7 +199,7 @@ impl App {
                 WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
                 TOOLTIPS_CLASSW,
                 None,
-                WS_POPUP | WINDOW_STYLE((TTS_ALWAYSTIP | TTS_NOPREFIX) as u32),
+                WS_POPUP | WINDOW_STYLE(TTS_ALWAYSTIP | TTS_NOPREFIX),
                 CW_USEDEFAULT,
                 CW_USEDEFAULT,
                 CW_USEDEFAULT,
@@ -220,6 +242,8 @@ impl App {
             Hit::Tab(i) => {
                 let t = self.tabs.get(i)?;
                 let mut s = t.label();
+                if t.pinned { s.push_str(" · Sabitlenmiş"); }
+                if t.muted { s.push_str(" · Sessiz"); }
                 if !t.url.is_empty() {
                     s.push('\n');
                     s.push_str(&url::display(&t.url));
@@ -375,7 +399,7 @@ impl App {
     // ---------- Ana sayfadaki bellek satırı ----------
 
     pub(super) fn update_ram_line(&mut self) {
-        if !self.on_start_page() {
+        if !self.on_start_page() || unsafe { IsIconic(self.hwnd) }.as_bool() {
             return;
         }
         let mut pids = vec![unsafe { windows::Win32::System::Threading::GetCurrentProcessId() }];

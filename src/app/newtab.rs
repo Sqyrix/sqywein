@@ -25,7 +25,7 @@ pub(super) struct StartLayout {
 
 /// Kısayol ekleme penceresi: iki metin kutusu ve iki düğme.
 pub(super) struct Dialog {
-    hwnd: HWND,
+    pub(super) hwnd: HWND,
     name: HWND,
     url: HWND,
     gfx: Gfx,
@@ -86,20 +86,20 @@ impl App {
         let g = &self.gfx;
         for (i, (r, b)) in l.bar_items.iter().zip(&self.state.favorites).enumerate() {
             if self.hover == Hit::BarItem(i) {
-                g.round(*r, 6.0, HOVER);
+                g.round(*r, 6.0, hover());
             }
             let icon = Rect::new(r.x + 10.0, r.cy() - 8.0, 16.0, 16.0);
             match self.icon_for(&b.url) {
                 Some(img) => g.image(&img, icon, false),
-                None => menu::avatar(g, icon, None, LINE, &Self::bar_label(b)),
+                None => menu::avatar(g, icon, None, line(), &Self::bar_label(b)),
             }
-            g.text(&Self::bar_label(b), Rect::new(icon.right() + 6.0, r.y, r.right() - icon.right() - 14.0, r.h), Font::Small, INK, Align::Left);
+            g.text(&Self::bar_label(b), Rect::new(icon.right() + 6.0, r.y, r.right() - icon.right() - 14.0, r.h), Font::Small, ink(), Align::Left);
         }
         if let Some(more) = l.bar_more {
             if self.hover == Hit::BarMore {
-                g.round(more, 6.0, HOVER);
+                g.round(more, 6.0, hover());
             }
-            g.text("»", more, Font::Ui, MUTED, Align::Center);
+            g.text("»", more, Font::Ui, muted(), Align::Center);
         }
         let _ = bar;
     }
@@ -162,7 +162,7 @@ impl App {
         let g = &self.gfx;
         let private = self.tabs[self.active].private;
         let s = self.start_layout(l.content);
-        g.round(l.content, 10.0, RAISED);
+        // Zemin camdır (paint_content buzlu katmanı çizer).
         g.glow(l.content.cx(), s.logo.cy() + 20.0, 280.0, 120.0, accent(), if private { 0.16 } else { 0.10 });
         // Sekmeler uyurken kedi de uyur: Sqywein'in hafifliğinin görünür hali.
         match (&self.sleeping_mascot, &self.logo) {
@@ -180,10 +180,10 @@ impl App {
             (_, Some(img)) => g.image(img, s.logo, false),
             _ => g.circle(s.logo.cx(), s.logo.cy(), 30.0, accent()),
         }
-        g.text(if private { "Gizli sekme" } else { "Sqywein" }, s.title, Font::Big, INK, Align::Center);
+        g.text(if private { "Gizli sekme" } else { "Sqywein" }, s.title, Font::Big, ink(), Align::Center);
         if !private && !self.ram_line.is_empty() {
             // Hafiflik görünür olsun: şu anki bellek ve uyuyan sekmeler.
-            g.text(&self.ram_line, Rect::new(l.content.x, s.title.bottom() + 2.0, l.content.w, 18.0), Font::Small, FAINT, Align::Center);
+            g.text(&self.ram_line, Rect::new(l.content.x, s.title.bottom() + 2.0, l.content.w, 18.0), Font::Small, faint(), Align::Center);
         }
 
         let r = s.search;
@@ -193,12 +193,12 @@ impl App {
             g.round_outline_alpha(r.inset(-5.0, -5.0), 31.0, accent(), 5.0, 0.07);
             g.round_outline_alpha(r.inset(-2.5, -2.5), 29.0, accent(), 3.0, 0.14);
         }
-        g.round(r, 27.0, SEARCH);
-        g.round_outline(r, 27.0, if focused { accent() } else { LINE }, if focused { 1.5 } else { 1.0 });
-        g.text(ICON_SEARCH, Rect::new(r.x + 18.0, r.y, 26.0, r.h), Font::Icon, if focused { accent() } else { MUTED }, Align::Center);
+        g.round(r, 27.0, search());
+        g.round_outline(r, 27.0, if focused { accent() } else { line() }, if focused { 1.5 } else { 1.0 });
+        g.text(ICON_SEARCH, Rect::new(r.x + 18.0, r.y, 26.0, r.h), Font::Icon, if focused { accent() } else { muted() }, Align::Center);
 
         if private {
-            g.text("Geçmiş ve çerezler bu sekme kapanınca silinir.", Rect::new(l.content.x, r.bottom() + 24.0, l.content.w, 20.0), Font::Small, FAINT, Align::Center);
+            g.text("Geçmiş ve çerezler bu sekme kapanınca silinir.", Rect::new(l.content.x, r.bottom() + 24.0, l.content.w, 20.0), Font::Small, faint(), Align::Center);
             return;
         }
         for (i, (t, b)) in s.tiles.iter().zip(&self.state.shortcuts).enumerate() {
@@ -206,8 +206,8 @@ impl App {
             self.paint_tile(*t, &Self::bar_label(b), self.icon_for(&b.url).as_deref(), hovered, false);
             if hovered {
                 let x = Self::tile_remove(*t);
-                g.circle(x.cx(), x.cy(), 10.0, if self.hover == Hit::TileRemove(i) { DANGER } else { LINE });
-                g.text(ICON_CLOSE, x, Font::SmallIcon, INK, Align::Center);
+                g.circle(x.cx(), x.cy(), 10.0, if self.hover == Hit::TileRemove(i) { danger() } else { line() });
+                g.text(ICON_CLOSE, x, Font::SmallIcon, ink(), Align::Center);
             }
         }
         if let Some(add) = s.add {
@@ -222,20 +222,20 @@ impl App {
     fn paint_tile(&self, t: Rect, label: &str, icon: Option<&Image>, hovered: bool, add: bool) {
         let g = &self.gfx;
         if hovered {
-            g.round(t.inset(4.0, 2.0), 12.0, HOVER);
+            g.round(t.inset(4.0, 2.0), 12.0, hover());
         }
         let (cx, cy) = (t.cx(), t.y + 34.0);
-        g.circle(cx, cy, 26.0, if hovered { LINE } else { SEARCH });
+        g.circle(cx, cy, 26.0, if hovered { line() } else { search() });
         let inner = Rect::new(cx - 12.0, cy - 12.0, 24.0, 24.0);
         if add {
-            g.text(ICON_ADD, inner, Font::Icon, INK, Align::Center);
+            g.text(ICON_ADD, inner, Font::Icon, ink(), Align::Center);
         } else {
             match icon {
                 Some(img) => g.image(img, inner, false),
                 None => menu::avatar(g, inner, None, accent(), label),
             }
         }
-        g.text(label, Rect::new(t.x + 8.0, t.y + 66.0, t.w - 16.0, 20.0), Font::Small, INK, Align::Center);
+        g.text(label, Rect::new(t.x + 8.0, t.y + 66.0, t.w - 16.0, 20.0), Font::Small, ink(), Align::Center);
     }
 
     /// Ana sayfadaki bir noktanın karşılığı.
@@ -294,7 +294,7 @@ impl App {
             let Ok(hwnd) = CreateWindowExW(WS_EX_TOOLWINDOW, DIALOG_CLASS, w!("Kısayol ekle"), WS_POPUP, x, y, w, h, Some(self.hwnd), None, Some(instance), None) else {
                 return;
             };
-            let dark: i32 = 1;
+            let dark: i32 = i32::from(is_dark());
             let _ = DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark as *const _ as _, 4);
             let corner = DWMWCP_ROUND;
             let _ = DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &corner as *const _ as _, 4);
@@ -391,8 +391,8 @@ impl App {
             WM_CTLCOLOREDIT => {
                 let hdc = HDC(wparam.0 as _);
                 unsafe {
-                    SetTextColor(hdc, COLORREF(colorref(INK)));
-                    SetBkColor(hdc, COLORREF(colorref(SEARCH)));
+                    SetTextColor(hdc, COLORREF(colorref(ink())));
+                    SetBkColor(hdc, COLORREF(colorref(search())));
                 }
                 Some(LRESULT(edit_brushes().1 .0 as isize))
             }
@@ -442,20 +442,20 @@ impl App {
             return;
         }
         let g = &d.gfx;
-        g.clear(RAISED);
-        g.round_outline(Rect::new(0.0, 0.0, DIALOG_W, DIALOG_H), 8.0, LINE, 1.0);
-        g.text("Kısayol ekle", Rect::new(20.0, 14.0, DIALOG_W - 40.0, 28.0), Font::UiBold, INK, Align::Left);
+        g.clear(raised());
+        g.round_outline(Rect::new(0.0, 0.0, DIALOG_W, DIALOG_H), 8.0, line(), 1.0);
+        g.text("Kısayol ekle", Rect::new(20.0, 14.0, DIALOG_W - 40.0, 28.0), Font::UiBold, ink(), Align::Left);
         let focus = unsafe { GetFocus() };
         let (f1, f2) = dialog_fields();
         for (f, e) in [(f1, d.name), (f2, d.url)] {
-            g.round(f, 10.0, SEARCH);
-            g.round_outline(f, 10.0, if focus == e { accent() } else { LINE }, if focus == e { 1.5 } else { 1.0 });
+            g.round(f, 10.0, search());
+            g.round_outline(f, 10.0, if focus == e { accent() } else { line() }, if focus == e { 1.5 } else { 1.0 });
         }
         let (cancel, save) = dialog_buttons();
-        g.round(cancel, 10.0, if d.hover == 1 { LINE } else { HOVER });
-        g.text("İptal", cancel, Font::Ui, INK, Align::Center);
-        g.round(save, 10.0, if d.hover == 2 { INK } else { accent() });
-        g.text("Ekle", save, Font::Ui, BASE, Align::Center);
+        g.round(cancel, 10.0, if d.hover == 1 { line() } else { hover() });
+        g.text("İptal", cancel, Font::Ui, ink(), Align::Center);
+        g.round(save, 10.0, if d.hover == 2 { ink() } else { accent() });
+        g.text("Ekle", save, Font::Ui, base(), Align::Center);
         d.gfx.end();
     }
 }

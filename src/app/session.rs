@@ -48,32 +48,49 @@ impl App {
 
     /// Çerezlerin anlık görüntüsünü ister (sonuç `on_cookies` ile gelir).
     pub(super) fn snapshot_cookies(&self) -> bool {
-        if !self.restores_session() {
+        if !self.restores_session() || self.clearing_data.contains(&self.state.current_profile) {
             return false;
         }
         match self.any_view() {
             Some(view) => {
-                engine::snapshot_session_cookies(&view);
-                true
+                engine::snapshot_session_cookies(&view, self.state.current_profile.clone(), self.cookie_epochs.get(&self.state.current_profile).copied().unwrap_or(0))
             }
             None => false,
         }
     }
 
-    pub(super) fn on_cookies(&mut self, cookies: Vec<CookieData>) {
-        if let Ok(json) = serde_json::to_vec(&cookies) {
+    pub(super) fn on_cookies(&mut self, profile: &str, generation: u64, cookies: Option<Vec<CookieData>>) {
+        if generation != self.cookie_epochs.get(profile).copied().unwrap_or(0) { return; }
+        if let Some(mut cookies) = cookies {
+          use sha2::{Digest, Sha256};
+          cookies.sort_by(|a,b| (&a.domain,&a.path,&a.name).cmp(&(&b.domain,&b.path,&b.name)));
+          if let Ok(json) = serde_json::to_vec(&cookies) {
+            let hash: [u8; 32] = Sha256::digest(&json).into();
+            let path = cookie_file(profile);
+            if self.cookie_hashes.get(&profile.to_owned()) == Some(&hash) && path.exists() {
+                if self.closing { self.finish_close(); }
+                return;
+            }
             if let Some(sealed) = net::protect(&json) {
-                let path = cookie_file(&self.state.current_profile);
                 let _ = std::fs::create_dir_all(state::root());
                 let temp = path.with_extension("tmp");
-                if std::fs::write(&temp, sealed).is_ok() {
-                    let _ = std::fs::rename(temp, path);
+                if std::fs::write(&temp, sealed).is_ok() && std::fs::rename(temp, path).is_ok() {
+                    self.cookie_hashes.insert(profile.to_owned(), hash);
                 }
             }
+          }
         }
         if self.closing {
             self.finish_close();
         }
+    }
+
+    pub(super) fn clear_saved_cookies(&mut self) {
+        self.cookie_hashes.remove(&self.state.current_profile);
+        *self.cookie_epochs.entry(self.state.current_profile.clone()).or_insert(0) += 1;
+        let path = cookie_file(&self.state.current_profile);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("tmp"));
     }
 
     /// Pencere kapanışı: önce çerezler toplanır, sonra her şey kapatılır.
@@ -94,9 +111,10 @@ impl App {
     }
 
     pub(super) fn finish_close(&mut self) {
+        self.cleanup_auth_popups(true);
         unsafe { let _ = KillTimer(Some(self.hwnd), TIMER_CLOSE); }
         self.save();
-        let _ = self.history.save();
+        let _ = self.history.save_profile(&self.state.current_profile);
         for t in &mut self.tabs {
             t.close_view();
         }
@@ -117,10 +135,11 @@ impl App {
         if host.is_empty() || url::is_internal(page_url) {
             return None;
         }
-        if let Some(hit) = self.icon_cache.borrow().get(&host) {
+        if let Some(hit) = self.icon_cache.borrow_mut().get(&host) {
             return hit.clone();
         }
         let img = crate::image::from_file(&favicon_file(&host), 32).map(Rc::new);
+        if img.is_none() && self.icon_fetching.borrow().len() >= 4 { return None; }
         self.icon_cache.borrow_mut().insert(host.clone(), img.clone());
         if img.is_none() && !self.state.settings.privacy_shield && self.icon_fetching.borrow_mut().insert(host.clone()) {
             // Yer işaretleri ve kısayollar için: hiç ziyaret edilmemiş sitenin simgesi.
@@ -145,6 +164,7 @@ impl App {
     }
 
     pub(super) fn on_favicon_downloaded(&mut self, host: String, bytes: Vec<u8>) {
+        self.icon_fetching.borrow_mut().remove(&host);
         let img = crate::image::from_bytes(&bytes, 32).map(Rc::new);
         if img.is_some() {
             let _ = std::fs::create_dir_all(favicon_dir());

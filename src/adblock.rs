@@ -121,15 +121,18 @@ pub fn set_levels(default: u8, sites: impl IntoIterator<Item = (String, u8)>) {
     SITE_LEVELS.with(|m| *m.borrow_mut() = sites.into_iter().collect());
 }
 
+pub fn release() {
+    ENGINE.with(|e| *e.borrow_mut() = None);
+    ANNOY.with(|e| *e.borrow_mut() = None);
+}
+
 pub fn is_ready() -> bool {
     ENGINE.with(|e| e.borrow().is_some())
 }
 
 pub fn install(engine: Engine, annoyances: Option<Engine>) {
     ENGINE.with(|e| *e.borrow_mut() = Some(engine));
-    if annoyances.is_some() {
-        ANNOY.with(|e| *e.borrow_mut() = annoyances);
-    }
+    ANNOY.with(|e| *e.borrow_mut() = annoyances);
 }
 
 /// Sekmenin ana sayfası değişti: sayaç sıfırlanır.
@@ -176,12 +179,14 @@ fn check(engine: &RefCell<Option<Engine>>, req: &Request) -> bool {
 
 /// İstek engellenmeli mi? `kind`: adblock istek türü ("script", "image", ...).
 pub fn should_block(tab: u32, url: &str, kind: &str) -> bool {
-    let page = page(tab);
-    let level = level_for(&page);
+    PAGES.with(|pages| {
+    let pages = pages.borrow();
+    let page = pages.get(&tab).map(String::as_str).unwrap_or_default();
+    let level = level_for(page);
     if level == OFF || url == page || !url.starts_with("http") {
         return false;
     }
-    let Ok(req) = Request::new(url, &page, kind, "get") else { return false };
+    let Ok(req) = Request::new(url, page, kind, "get") else { return false };
     let block = ENGINE.with(|e| check(e, &req)) || (level >= COMPLETE && ANNOY.with(|e| check(e, &req)));
     if block {
         BLOCKED.with(|b| *b.borrow_mut().entry(tab).or_insert(0) += 1);
@@ -190,6 +195,7 @@ pub fn should_block(tab: u32, url: &str, kind: &str) -> bool {
         }
     }
     block
+    })
 }
 
 /// Siteye özel kozmetik kurallar: (belge oluşurken çalışacak betik, genel kurallar istenmeli mi, istisnalar).
@@ -216,7 +222,7 @@ pub fn page_resources(url: &str) -> Option<(String, bool, HashSet<String>)> {
 }
 
 /// Sayfadaki sınıf ve kimliklere göre genel gizleme CSS'i.
-pub fn generic_css(page_url: &str, classes: &[String], ids: &[String], exceptions: &HashSet<String>) -> Option<String> {
+pub fn generic_css(page_url: &str, classes: &[String], ids: &[String], exceptions: &HashSet<String>) -> Option<Vec<String>> {
     let level = level_for(page_url);
     if level < OPTIMAL {
         return None;
@@ -227,51 +233,92 @@ pub fn generic_css(page_url: &str, classes: &[String], ids: &[String], exception
             selectors.extend(extra);
         }
     }
-    (!selectors.is_empty()).then(|| format!("{}{{display:none!important}}", selectors.join(",")))
+    selectors.sort_unstable(); selectors.dedup();
+    (!selectors.is_empty()).then(|| selectors.into_iter().map(|s| format!("{s}{{display:none!important}}")).collect())
 }
 
 /// Belge oluşur oluşmaz `<style>` ekleyen betik (yalnızca o sitenin üst çerçevesinde).
 fn style_script(host: &str, css: &str) -> String {
     let host = serde_json::to_string(host).unwrap_or_default();
     let css = serde_json::to_string(css).unwrap_or_default();
-    format!(
-        "(()=>{{if(window.top!==window||window.__sqStyle||location.hostname.replace(/^www\\./,'')!=={host})return;window.__sqStyle=1;\
-         const add=()=>{{const s=document.createElement('style');s.textContent={css};(document.head||document.documentElement).appendChild(s);}};\
-         if(document.documentElement)add();else document.addEventListener('readystatechange',add,{{once:true}});}})();"
-    )
+    format!("(()=>{{if(window.top!==window||location.hostname.replace(/^www\\./,'')!=={host})return;const add=()=>{{let s=window.__sqPageStyle;if(!s?.isConnected){{s=document.createElement('style');(document.head||document.documentElement).appendChild(s);window.__sqPageStyle=s;}}if(s.textContent!=={css})s.textContent={css};}};if(document.documentElement)add();else document.addEventListener('readystatechange',add,{{once:true}});}})();")
 }
 
 /// Sonradan eklenen genel CSS için `ExecuteScript` betiği.
-pub fn append_css_script(css: &str) -> String {
-    let css = serde_json::to_string(css).unwrap_or_default();
-    format!("(()=>{{const s=document.createElement('style');s.textContent={css};(document.head||document.documentElement).appendChild(s);}})();")
+pub fn append_css_script(rules: &[String]) -> String {
+    let rules = serde_json::to_string(rules).unwrap_or_default();
+    format!("(()=>{{let state=window.__sqGenericStyle;if(!state?.node?.isConnected){{const node=document.createElement('style');(document.head||document.documentElement).appendChild(node);state=window.__sqGenericStyle={{node,rules:new Set()}};}}for(const rule of {rules}){{if(state.rules.has(rule))continue;try{{state.node.sheet.insertRule(rule,state.node.sheet.cssRules.length);state.rules.add(rule);}}catch{{}}}}}})();")
 }
 
 /// Sayfadaki sınıf/kimlik adlarını toplayıp Sqywein'e bildiren betik (her sayfaya).
 pub const COLLECTOR_SCRIPT: &str = r#"(() => {
   if (window.top !== window || !window.chrome || !window.chrome.webview) return;
+  let observer = null, enabled = false, walker = null, root = null, scanTimer = 0;
+  const roots = new Set();
   const seenC = new Set(), seenI = new Set();
   let pendingC = [], pendingI = [], timer = 0;
   const flush = () => {
     timer = 0;
     if (!pendingC.length && !pendingI.length) return;
-    window.chrome.webview.postMessage({ type: 'sq.cosmetic', classes: pendingC.slice(0, 2000), ids: pendingI.slice(0, 2000) });
+    window.chrome.webview.postMessage({ type: 'sq.cosmetic', classes: pendingC, ids: pendingI });
     pendingC = []; pendingI = [];
   };
-  const scan = root => {
-    const nodes = root.querySelectorAll ? root.querySelectorAll('[class],[id]') : [];
-    for (const n of nodes) {
-      if (n.id && !seenI.has(n.id)) { seenI.add(n.id); pendingI.push(n.id); }
-      if (n.classList) for (const c of n.classList) if (!seenC.has(c)) { seenC.add(c); pendingC.push(c); }
+  const remember = (name, seen, pending) => {
+    if (!name || name.length > 200 || seen.has(name)) return;
+    if (seen.size >= 16000) seen.delete(seen.values().next().value);
+    seen.add(name); pending.push(name);
+    if (pending.length >= 2000) { clearTimeout(timer); flush(); }
+  };
+  const inspect = n => {
+    if (n.nodeType !== 1) return;
+    remember(n.id, seenI, pendingI);
+    for (const c of n.classList) remember(c, seenC, pendingC);
+  };
+  const step = () => {
+    scanTimer = 0;
+    const deadline = performance.now() + 4;
+    let count = 0;
+    while (enabled && count < 256 && performance.now() < deadline) {
+      if (!walker) {
+        root = roots.values().next().value;
+        if (!root) break;
+        roots.delete(root);
+        if (!root.isConnected) continue;
+        walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+        inspect(root); count++;
+      }
+      if (!root.isConnected) { walker = null; root = null; continue; }
+      const n = walker.nextNode();
+      if (n) { inspect(n); count++; } else { walker = null; root = null; }
     }
-    if (!timer) timer = setTimeout(flush, 300);
+    if (!timer && (pendingC.length || pendingI.length)) timer = setTimeout(flush, 300);
+    if (enabled && (walker || roots.size)) scanTimer = setTimeout(step, 40);
+  };
+  const scan = node => {
+    if (!enabled || !node.isConnected) return;
+    if (roots.size >= 128) { roots.clear(); roots.add(document); }
+    else if (!roots.has(document)) roots.add(node);
+    if (!scanTimer) scanTimer = setTimeout(step, 0);
   };
   const start = () => {
+    if (!enabled || observer) return;
     scan(document);
-    new MutationObserver(ms => { for (const m of ms) for (const n of m.addedNodes) if (n.nodeType === 1) { scan(n); scan({ querySelectorAll: () => [n] }); } })
-      .observe(document.documentElement, { childList: true, subtree: true });
+    observer = new MutationObserver(ms => { for (const m of ms) for (const n of m.addedNodes) if (n.nodeType === 1) scan(n); });
+    observer.observe(document.documentElement, { childList: true, subtree: true });
   };
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once: true }); else start();
+  window.__sqCollect = on => {
+    if (enabled === !!on) return;
+    enabled = !!on;
+    if (enabled) {
+      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, {once:true}); else start();
+    } else {
+      document.removeEventListener('DOMContentLoaded', start);
+      observer?.disconnect(); observer = null;
+      clearTimeout(timer); clearTimeout(scanTimer); timer = scanTimer = 0;
+      roots.clear(); walker = root = null;
+      seenC.clear(); seenI.clear(); pendingC = []; pendingI = [];
+    }
+  };
 })();"#;
 
 /// YouTube modülü: oynatıcı yanıtlarındaki reklam alanlarını budar, yine de
@@ -451,7 +498,7 @@ mod tests {
         assert!(script.contains(".ad-banner"));
         assert!(generic);
         let css = generic_css("https://example.com/", &["sponsored-box".into()], &[], &exceptions).unwrap();
-        assert!(css.contains(".sponsored-box"));
+        assert!(css.iter().any(|s| s.contains(".sponsored-box")));
     }
 
     /// Betikleri dosyaya yazar; `node --check` ile doğrulanır.
@@ -463,7 +510,7 @@ mod tests {
         std::fs::write(dir.join("youtube.js"), youtube_script(true, &["example.com".into()], &["m.example.org".into()])).unwrap();
         std::fs::write(dir.join("collector.js"), COLLECTOR_SCRIPT).unwrap();
         std::fs::write(dir.join("style.js"), style_script("ornek.com", "a[href*='x']{display:none!important}")).unwrap();
-        std::fs::write(dir.join("append.js"), append_css_script(".ad{display:none}")).unwrap();
+        std::fs::write(dir.join("append.js"), append_css_script(&[".ad{display:none}".into(), ".another{display:none}".into()])).unwrap();
     }
 
     /// Ağ gerektirir: `cargo test -- --ignored gercek_listeler --nocapture`

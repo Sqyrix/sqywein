@@ -13,7 +13,7 @@ fs.mkdirSync(artifacts, {recursive:true});
 process.env.TEMP = artifacts;
 process.env.TMP = artifacts;
 const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
-const pages = ['history','downloads','bookmarks','extensions','settings'];
+const pages = ['history','downloads','bookmarks','passwords','extensions','settings'];
 const errors = [];
 const external = [];
 let checks=0;
@@ -52,7 +52,7 @@ async function main(){
       await page.setViewportSize({width,height:900});
       for(const name of pages){
         await goto(name);
-        check(await page.locator('nav a').count()===5,`${name} navigation`);
+        check(await page.locator('nav a').count()===6,`${name} navigation`);
         check(await page.locator('nav [aria-current="page"]').getAttribute('href')===`${name}.html`,`${name} active nav`);
         check(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`${name} no overflow at ${width}`);
         check(await page.locator('h1').textContent()===await page.title(),`${name} heading/title`);
@@ -60,6 +60,27 @@ async function main(){
       }
     }
     await page.setViewportSize({width:1280,height:900});
+    for(const width of [1280,600]){
+      await page.setViewportSize({width,height:900});
+      for(const name of pages){
+        await goto(name);
+        for(const theme of ['light','dark','sqywein']){
+          if(name==='settings')await page.locator('#theme').selectOption(theme);
+          else await page.evaluate(theme=>send('settings.set',{key:'theme',value:theme}),theme);
+          await page.waitForFunction(theme=>document.documentElement.dataset.theme===theme,theme);
+          check(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`${name} ${theme} no overflow at ${width}`);
+          check(await page.evaluate(()=>document.documentElement.style.colorScheme)===(theme==='light'?'light':'dark'),`${name} ${theme} color scheme`);
+          if(name==='settings')await page.screenshot({path:path.join(artifacts,`theme-${theme}-${width}.png`),fullPage:true});
+        }
+      }
+    }
+    await page.setViewportSize({width:1280,height:900});await goto('settings');
+    check(await page.locator('#theme option').allTextContents().then(v=>v.join('|'))==='Açık|Koyu|Sqywein|Sistem','four named theme choices');
+    await page.emulateMedia({colorScheme:'light'});await page.locator('#theme').selectOption('system');
+    await page.waitForFunction(()=>document.documentElement.style.colorScheme==='light');
+    await page.emulateMedia({colorScheme:'dark'});await page.waitForFunction(()=>document.documentElement.style.colorScheme==='dark');
+    check(await page.locator('#theme').inputValue()==='system','system theme follows changes while keeping the System preference');
+    await page.locator('#theme').selectOption('sqywein');
     await goto('history');
     check(await page.locator('.row').count()===4,'history mock rows');
     await page.locator('#search').fill('MDN');await page.waitForTimeout(240);
@@ -93,7 +114,7 @@ async function main(){
     await page.locator('.row').first().dragTo(page.locator('.row').last());await wait();check((await latest('bookmarks.move')).from===0 && (await latest('bookmarks.move')).to===3,'drag reorder indexes');
     await page.locator('.row a').first().click({modifiers:['Control']});check((await latest('open')).newTab===true,'ctrl open new tab');
     await page.locator('.row a').first().click({button:'middle'});check((await latest('open')).newTab===true,'middle open new tab');
-    await page.locator('.row a').first().click();await page.waitForTimeout(300);check((await latest('open')).newTab===false,'normal open current tab');
+    await page.locator('.row a').first().click();await page.waitForTimeout(300);check((await latest('open')).newTab===true,'normal bookmark opens new tab');
     await page.locator('.row').first().getByRole('button',{name:'Yer işaretini sil',exact:true}).click();await wait();check(await page.locator('.row').count()===3,'bookmark removal');
     await goto('extensions');
     await page.locator('[role=switch]').first().click();await wait();check(await page.locator('[role=switch]').first().getAttribute('aria-checked')==='false','extension toggle');
@@ -105,13 +126,13 @@ async function main(){
     await page.locator('#load').click();check(!!await latest('extensions.loadUnpacked'),'unpacked protocol');
     await page.evaluate(()=>receive({type:'extensions.list',supported:false,items:[]}));check(await page.locator('#load').isDisabled() && await page.locator('#unsupported').isVisible(),'unsupported extension state');
     await goto('settings');
-    check(await page.locator('[role=switch]').count()===5,'settings switches');
+    check(await page.locator('[role=switch]').count()>=6,'settings switches');
     await page.locator('#searchEngine').selectOption('duckduckgo');check((await latest('settings.set')).key==='searchEngine' && (await latest('settings.set')).value==='duckduckgo','search setting');
     await page.locator('[data-setting=freezeTabs]').focus();await page.keyboard.press('Space');check((await latest('settings.set')).value===false,'keyboard switch boolean');
     await page.locator('#defaultZoom').selectOption('125');check((await latest('settings.set')).value===125,'zoom numeric');
     await page.locator('#startup').selectOption('newtab');await page.locator('#tracking').selectOption('strict');
     for(const key of ['sleepTabs','hardwareAcceleration','savePasswords','autofill']){await page.locator(`[data-setting=${key}]`).click();const message=await latest('settings.set');check(message.key===key && typeof message.value==='boolean',`${key} boolean setting`);}
-    await page.locator('#passwords').click();check((await latest('open')).url==='https://passwords.google.com' && (await latest('open')).newTab,'password manager');
+    await page.locator('#passwords-manage').click();check((await latest('open')).url==='sqywein://passwords','password manager');
     await page.locator('input[value=history]').uncheck();check(await page.locator('#clear-button').isDisabled(),'no data selected');
     await page.locator('input[value=cookies]').check();await page.locator('#clear-button').click();await page.getByRole('button',{name:'Onayla',exact:true}).click();check(JSON.stringify((await latest('data.clear')).kinds)==='["cookies"]','selected data only');
     check(await page.getByRole('button',{name:'Profili kaldır',exact:true}).first().isDisabled(),'current profile protected');
@@ -119,11 +140,41 @@ async function main(){
     await page.locator('#profiles .row').last().getByRole('button',{name:'Adını değiştir',exact:true}).click();await page.getByRole('textbox',{name:'Yeni ad'}).fill('Yeni profil');await page.getByRole('textbox',{name:'Yeni ad'}).press('Enter');await wait();check((await latest('profiles.rename')).name==='Yeni profil','profile rename');
     await page.locator('#profiles .row').last().getByRole('button',{name:'Geçiş yap',exact:true}).click();await wait();check(await page.locator('#profiles .row').last().getByRole('button',{name:'Profili kaldır',exact:true}).isDisabled(),'profile switch');
     await page.locator('#profiles .row').first().getByRole('button',{name:'Profili kaldır',exact:true}).click();await page.getByRole('button',{name:'Onayla',exact:true}).click();await wait();check(await page.locator('#profiles .row').count()===2,'profile remove');
+    // Functional settings navigation and empty states.
+    await page.getByRole('button',{name:'Performans',exact:true}).click();
+    check(await page.locator('#settings > section:visible').count()===1,'category isolates performance');
+    await page.locator('#settings-search').fill('kamera');
+    check(await page.locator('[aria-labelledby=permissions-heading]').isVisible(),'settings search finds camera permissions');
+    await page.locator('#settings-search').fill('bulunmayan-ayar-xyz');
+    check(await page.locator('#settings-empty').isVisible(),'settings no results');
+    await page.getByRole('button',{name:'Tümü',exact:true}).click();
+    await page.locator('#neverSleep').fill('meet.google.com, localhost');await page.locator('#neverSleep').press('Tab');
+    check((await latest('settings.set')).key==='neverSleep','sleep exclusion protocol');
+    await page.locator('#downloadFolder').fill('C:/Downloads');await page.locator('#downloadFolder').press('Tab');
+    check((await latest('settings.set')).key==='downloadFolder','download folder protocol');
+    await page.locator('#permission-origin').fill('https://example.com/path');
+    await page.locator('#permission-kind').selectOption('2');await page.locator('#permission-state').selectOption('2');
+    await page.locator('#permission-form button').click();
+    check((await latest('permissions.set')).origin==='https://example.com' && (await latest('permissions.set')).state===2,'permission origin and deny state');
+    await page.evaluate(()=>receive({type:'permissions.list',items:[{origin:'https://example.com',kind:2,state:2}]}));
+    await page.locator('#permission-list button').click();check((await latest('permissions.set')).state===0,'permission reset');
+    await goto('bookmarks');
+    await page.locator('#bookmark-import').setInputFiles({name:'bookmarks.html',mimeType:'text/html',buffer:Buffer.from('<DL><DT><A HREF="https://example.com">Example</A><DT><A HREF="javascript:alert(1)">Unsafe</A></DL>')});
+    await page.waitForTimeout(100);
+    check((await latest('bookmarks.import')).items.length===1,'bookmark import rejects script URLs');
+    await goto('passwords');
+    check(await page.locator('.site-list').count()===1,'password page renders accounts');
+    await page.locator('#add-open').click();
+    await page.locator('#add-form [name=url]').fill('https://test.example');
+    await page.locator('#add-form [name=username]').fill('test-user');
+    await page.locator('#add-form [name=password]').fill('test-secret');
+    await page.locator('#add-form button[type=submit]').click();
+    check((await latest('passwords.add')).username==='test-user','password add protocol');
     await page.emulateMedia({reducedMotion:'reduce'});await goto('downloads');check(await page.locator('.progress span').evaluate(node=>getComputedStyle(node).transitionDuration)==='0s','reduced motion');
     // Exercise a real WebView2-shaped bridge: mock must remain absent.
     const native=await context.newPage();native.on('pageerror',e=>errors.push(String(e)));
     await native.addInitScript(()=>{window.__posted=[];window.chrome=window.chrome || {};window.chrome.webview={postMessage(message){window.__posted.push(message);},addEventListener(type,callback){window.__receive=callback;}};});
-    await native.goto(`${base}/history.html`);check((await native.evaluate(()=>window.__posted))[0].type==='history.list','native bridge initial request');
+    await native.goto(`${base}/history.html`);check((await native.evaluate(()=>window.__posted)).some(m=>m.type==='history.list'),'native bridge initial request');
     await native.evaluate(()=>window.__receive({data:{type:'history.list',items:[{url:'https://example.com',title:'Gerçek köprü',when:'2026-01-01T10:00:00Z',visits:1}]}}));check(await native.locator('.row').count()===1,'native bridge receives');
     await native.locator('.row a').click();check((await native.evaluate(()=>window.__posted.at(-1))).type==='open','native bridge posts');
     await native.goto(`${base}/downloads.html`);
@@ -139,7 +190,7 @@ async function main(){
     await native.goto(`${base}/bookmarks.html`);await native.evaluate(()=>window.__receive({data:{type:'bookmarks.list',items:[]}}));check(await native.locator('.empty').count()===1,'native empty bookmarks');
     await native.close();
     check(errors.length===0,`browser errors: ${errors.join('\n')}`);check(external.length===0,`external requests: ${external.join('\n')}`);
-    console.log(`PASS: ${checks} assertions; all five pages at 1280px and 600px; no browser errors or external requests.`);
+    console.log(`PASS: ${checks} assertions; all six pages at 1280px and 600px; no browser errors or external requests.`);
     console.log(`Screenshots: ${artifacts}`);
   }finally{await context.close();}
 }

@@ -48,8 +48,55 @@ pub fn format_mb(bytes: u64) -> String {
     format!("{} MB", (bytes + 512 * 1024) / (1024 * 1024))
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Pressure { #[default] Normal, Elevated, Critical }
+
+impl Pressure {
+    /// Fiziksel RAM ve commit alanı; histerezis eşik yakınında gidip gelmeyi önler.
+    pub fn next(self, total: u64, available: u64, commit_total: u64, commit_free: u64) -> Self {
+        if total == 0 { return self; }
+        let mb = 1024 * 1024;
+        let critical = available < (total / 20).max(512 * mb)
+            || (commit_total > 0 && commit_free < commit_total / 20);
+        let elevated = available < (total * 12 / 100).max(1024 * mb)
+            || (commit_total > 0 && commit_free < commit_total / 10);
+        let recovered = available >= (total * 18 / 100).max(1536 * mb)
+            && (commit_total == 0 || commit_free >= commit_total * 15 / 100);
+        if critical || (self == Self::Critical && (available < (total * 8 / 100).max(768 * mb)
+            || (commit_total > 0 && commit_free < commit_total * 8 / 100))) { Self::Critical }
+        else if elevated || (self != Self::Normal && !recovered) { Self::Elevated }
+        else { Self::Normal }
+    }
+
+    pub fn sample(self) -> Self {
+        use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+        let mut status = MEMORYSTATUSEX { dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32, ..Default::default() };
+        if unsafe { GlobalMemoryStatusEx(&mut status) }.is_err() { return self; }
+        self.next(status.ullTotalPhys, status.ullAvailPhys, status.ullTotalPageFile, status.ullAvailPageFile)
+    }
+
+    /// Dondurma ve yalnızca baskı altında otomatik boşaltma eşikleri (saniye).
+    pub fn delays(self) -> (u64, Option<u64>) {
+        match self { Self::Normal => (30, None), Self::Elevated => (15, Some(180)), Self::Critical => (10, Some(60)) }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pressure_recovers_without_thrashing_and_handles_commit_exhaustion() {
+        use super::Pressure::*;
+        let gb = 1024 * 1024 * 1024;
+        assert_eq!(Normal.next(16*gb, 8*gb, 24*gb, 12*gb), Normal);
+        assert_eq!(Normal.next(16*gb, gb, 24*gb, 12*gb), Elevated);
+        assert_eq!(Normal.next(16*gb, gb/2, 24*gb, 12*gb), Critical);
+        assert_eq!(Critical.next(16*gb, gb, 24*gb, 12*gb), Critical);
+        assert_eq!(Critical.next(16*gb, 2*gb, 24*gb, 12*gb), Elevated);
+        assert_eq!(Elevated.next(16*gb, 3*gb, 24*gb, 12*gb), Normal);
+        assert_eq!(Normal.next(16*gb, 8*gb, 24*gb, gb/2), Critical);
+        assert_eq!(Normal.delays().1, None);
+        assert_eq!(Critical.delays().1, Some(60));
+    }
     #[test]
     fn kendi_bellegi() {
         let pid = std::process::id();

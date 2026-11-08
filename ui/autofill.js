@@ -3,7 +3,17 @@
   if (!window.chrome?.webview || location.origin === 'https://sqywein.ui' || window.__sqPw) return;
   window.__sqPw = true;
   const bridge = window.chrome.webview;
-  const send = message => bridge.postMessage(message);
+  let appTheme = /*__SQ_THEME__*/null;
+  const applyPopupTheme=()=>{
+    if(!popup||!appTheme)return;
+    for(const key of ['raised','ink','line','hover','muted','faint']){
+      const value=appTheme.colors?.[key];if(/^#[0-9a-f]{6}$/i.test(value||''))popup.style.setProperty('--sq-'+key,value,'important');
+    }
+    popup.style.setProperty('color-scheme',appTheme.dark===false?'light':'dark','important');
+  };
+  const documentToken = crypto.randomUUID();
+  Object.defineProperty(window, "__sqPwDocument", {value:documentToken});
+  const send = message => bridge.postMessage({...message, documentToken});
   const nativeSet = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
   let accounts = [], queried = false, timer, active = null, pending = null, popup = null, options = [], selected = 0;
   const fields = new WeakSet();
@@ -51,8 +61,9 @@
     popup = document.createElement('div');
     popup.style.cssText = `all:initial!important;position:fixed!important;left:${Math.max(4,Math.min(rect.left,innerWidth-240))}px!important;top:${rect.bottom+5}px!important;width:${Math.min(Math.max(rect.width,230),innerWidth-8)}px!important;z-index:2147483647!important;`;
     const root = popup.attachShadow({mode:'closed'});
+    applyPopupTheme();
     const style = document.createElement('style');
-    style.textContent = ':host{color-scheme:dark}*{box-sizing:border-box}.list{background:#211D2E;color:#F4F1FC;border:1px solid #3D3654;border-radius:10px;padding:6px;box-shadow:0 8px 24px #0006;max-height:300px;overflow:auto;font:13px "Segoe UI Variable Text","Segoe UI",sans-serif}button{display:flex;gap:12px;align-items:center;text-align:left;width:100%;border:0;border-radius:6px;padding:9px 10px;background:transparent;color:inherit;font:inherit;cursor:pointer}button[aria-selected=true],button:hover,button:focus-visible{background:#2E2940;outline:none}.icon{color:#B8AED0;font-family:"Segoe Fluent Icons","Segoe MDL2 Assets",sans-serif;font-size:15px;width:18px;text-align:center;flex:none}.text{display:flex;flex-direction:column;min-width:0}.top{display:flex;gap:8px;align-items:baseline;min-width:0}.user{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.site{color:#8E84A8;font-size:12px;white-space:nowrap}.dots{color:#B8AED0;letter-spacing:1px;font-size:11px}.sep{height:1px;background:#3D3654;margin:6px 4px}.manage{color:#B8AED0}';
+    style.textContent = ':host{color-scheme:dark}*{box-sizing:border-box}.list{background:var(--sq-raised,#211D2E);color:var(--sq-ink,#F4F1FC);border:1px solid var(--sq-line,#3D3654);border-radius:10px;padding:6px;box-shadow:0 8px 24px #0006;max-height:300px;overflow:auto;font:13px "Segoe UI Variable Text","Segoe UI",sans-serif}button{display:flex;gap:12px;align-items:center;text-align:left;width:100%;border:0;border-radius:6px;padding:9px 10px;background:transparent;color:inherit;font:inherit;cursor:pointer}button[aria-selected=true],button:hover,button:focus-visible{background:var(--sq-hover,#2E2940);outline:none}.icon{color:var(--sq-muted,#B8AED0);font-family:"Segoe Fluent Icons","Segoe MDL2 Assets",sans-serif;font-size:15px;width:18px;text-align:center;flex:none}.text{display:flex;flex-direction:column;min-width:0}.top{display:flex;gap:8px;align-items:baseline;min-width:0}.user{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.site{color:var(--sq-faint,#8E84A8);font-size:12px;white-space:nowrap}.dots{color:var(--sq-muted,#B8AED0);letter-spacing:1px;font-size:11px}.sep{height:1px;background:var(--sq-line,#3D3654);margin:6px 4px}.manage{color:var(--sq-muted,#B8AED0)}';
     const list = document.createElement('div'); list.className = 'list'; list.setAttribute('role','listbox'); list.setAttribute('aria-label','Kayıtlı hesaplar');
     selected = 0;
     const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
@@ -60,7 +71,7 @@
     options = accounts.map((account,index) => {
       const button = el('button'); button.type = 'button'; button.setAttribute('role','option'); button.setAttribute('aria-selected',String(index === 0));
       const icon = el('span','icon','\uE774'); icon.setAttribute('aria-hidden','true');
-      const top = el('span','top'); top.append(el('span','user',account.username || 'Kullanıcı adı yok'), el('span','site',site));
+      const top = el('span','top'); top.append(el('span','user',account.username || 'Kullanıcı adı yok'), el('span','site',account.site || site));
       const text = el('span','text'); text.append(top, el('span','dots','••••••••'));
       button.append(icon,text);
       button.addEventListener('pointerdown',event => event.preventDefault());
@@ -132,9 +143,11 @@
       }
     }
   }
-  bridge.addEventListener('message',event => {
+  const receivePassword = event => {
     const message = event.data;
     if (!message || typeof message !== 'object') return;
+    if(message.type==='theme'){appTheme=message;applyPopupTheme();return;}
+    if(message.theme){appTheme=message.theme;applyPopupTheme();}
     if (message.type === 'pw.accounts' && Array.isArray(message.accounts)) {
       accounts = message.accounts.filter(a => a && Number.isSafeInteger(a.id) && typeof a.username === 'string');
       close();
@@ -153,7 +166,9 @@
         nativeSet.call(input,value); input.dispatchEvent(new Event('input',{bubbles:true})); input.dispatchEvent(new Event('change',{bubbles:true}));
       }
     }
-  });
+  };
+  bridge.addEventListener('message', receivePassword);
+  window.addEventListener('sq-password', event => { if(event.data?.documentToken === documentToken) receivePassword(event); });
   document.addEventListener('submit',event => {
     const password = [...event.target.querySelectorAll('input[type="password"]')].find(visible);
     if (password) capture(pair(password));
@@ -170,7 +185,15 @@
   },true);
   document.addEventListener('focusin',event => { if (popup && event.target !== active?.username && event.target !== active?.password && event.target !== popup) close(); });
   window.addEventListener('scroll',close,true); window.addEventListener('resize',close);
-  const observer = new MutationObserver(() => { if (!timer) timer = setTimeout(() => { timer = null; scan(); },180); });
+  // Feed animations and class/style changes outside inputs do not require a
+  // complete login-form scan. Inspect only newly added input subtrees.
+  const observer = new MutationObserver(mutations => {
+    const relevant = mutations.some(m => m.type === 'attributes'
+      ? (m.target instanceof HTMLInputElement || (m.target instanceof Element && !!m.target.querySelector('input[type="password"]')))
+      : [...m.addedNodes].some(n => n.nodeType === 1 && (n.matches('input') || n.querySelector('input'))));
+    if (active && !active.password?.isConnected && !active.username?.isConnected) { close(); active = null; }
+    if (relevant && !timer) timer = setTimeout(() => { timer = null; scan(); },180);
+  });
   observer.observe(document,{childList:true,subtree:true,attributes:true,attributeFilter:['type','hidden','style','class','autocomplete']});
   scan();
 })();

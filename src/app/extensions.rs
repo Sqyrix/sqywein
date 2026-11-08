@@ -15,7 +15,6 @@ use std::{
 };
 use windows::Win32::{
     System::Com::{CoCreateInstance, CoInitializeEx, CoTaskMemFree, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED},
-    System::Com::Urlmon::URLDownloadToFileW,
     UI::Shell::{FileOpenDialog, IFileOpenDialog, FOS_FORCEFILESYSTEM, FOS_PICKFOLDERS, SIGDN_FILESYSPATH},
 };
 
@@ -25,7 +24,7 @@ const POPUP_H: f32 = 520.0;
 
 /// Ağdan dosya indirir (arka plan iş parçacığında çağrılır).
 pub fn download_file(url: &str, path: &Path) -> bool {
-    unsafe { URLDownloadToFileW(None, &HSTRING::from(url), &HSTRING::from(path.as_os_str()), 0, None).is_ok() }
+    crate::net::fetch(url, 64 * 1024 * 1024).is_some_and(|bytes| std::fs::write(path, bytes).is_ok())
 }
 
 /// Mağaza sayfasındaysa uzantının mağaza kimliği.
@@ -51,13 +50,67 @@ pub(super) fn crx_zip(bytes: &[u8]) -> Option<&[u8]> {
     bytes.get(start..)
 }
 
+// CRX3 stores signing public keys in protobuf proofs. Preserve the package's
+// identity in manifest.key so updates from a fresh staging directory keep the ID.
+fn varint(bytes: &mut &[u8]) -> Option<u64> {
+    let mut value = 0u64;
+    for shift in (0..=63).step_by(7) {
+        let (&byte, rest) = bytes.split_first()?; *bytes = rest;
+        if shift == 63 && byte > 1 { return None; }
+        value |= ((byte & 127) as u64) << shift;
+        if byte & 128 == 0 { return Some(value); }
+    }
+    None
+}
+fn protobuf_fields(mut bytes: &[u8]) -> Option<Vec<(u64, &[u8])>> {
+    let mut out = Vec::new();
+    while !bytes.is_empty() {
+        let tag = varint(&mut bytes)?;
+        match tag & 7 {
+            0 => { varint(&mut bytes)?; }
+            1 => { bytes = bytes.get(8..)?; }
+            2 => { let len = usize::try_from(varint(&mut bytes)?).ok()?; let data = bytes.get(..len)?; bytes = bytes.get(len..)?; out.push((tag >> 3, data)); }
+            5 => { bytes = bytes.get(4..)?; }
+            _ => return None,
+        }
+    }
+    Some(out)
+}
+fn store_public_key<'a>(bytes: &'a [u8], store: &str) -> Option<&'a [u8]> {
+    let number = |offset| bytes.get(offset..offset+4).map(|b| u32::from_le_bytes(b.try_into().unwrap()) as usize);
+    if bytes.get(..4)? != b"Cr24" { return None; }
+    let keys = match number(4)? {
+        2 => vec![bytes.get(16..16usize.checked_add(number(8)?)?)?],
+        3 => {
+            let header = bytes.get(12..12usize.checked_add(number(8)?)?)?;
+            protobuf_fields(header)?.into_iter().filter(|(tag,_)| *tag == 2 || *tag == 3).filter_map(|(_, proof)| protobuf_fields(proof)?.into_iter().find(|(tag,_)| *tag == 1).map(|(_, key)| key)).collect()
+        }
+        _ => return None,
+    };
+    keys.into_iter().find(|key| {
+        let hex = crate::update::sha256_hex(key);
+        let id: String = hex[..32].chars().map(|c| (b'a' + c.to_digit(16).unwrap() as u8) as char).collect();
+        id == store
+    })
+}
+fn bind_store_identity(bytes: &[u8], store: &str, dir: &Path) -> std::result::Result<(), String> {
+    let key = store_public_key(bytes, store).ok_or("Paketin mağaza kimliği doğrulanamadı")?;
+    let mut m = manifest(dir).ok_or("Manifest okunamadı")?;
+    m["key"] = Value::String(crate::image::base64(key));
+    std::fs::write(dir.join("manifest.json"), serde_json::to_vec(&m).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+}
+
 fn unpack(bytes: &[u8], dir: &Path) -> std::result::Result<(), String> {
     let zip = crx_zip(bytes).ok_or("Paket biçimi tanınmadı")?;
     let mut archive = zip::ZipArchive::new(Cursor::new(zip)).map_err(|e| e.to_string())?;
-    let _ = std::fs::remove_dir_all(dir);
+    if archive.len() > 10000 { return Err("Paket çok fazla dosya içeriyor".into()); }
+    let mut expanded = 0u64;
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     for i in 0..archive.len() {
         let mut file = archive.by_index(i).map_err(|e| e.to_string())?;
-        let Some(rel) = file.enclosed_name() else { continue };
+        expanded = expanded.checked_add(file.size()).ok_or("Paket çok büyük")?;
+        if expanded > 256 * 1024 * 1024 { return Err("Açılmış paket 256 MB sınırını aşıyor".into()); }
+        let Some(rel) = file.enclosed_name() else { return Err("Güvensiz paket yolu".into()) };
         // "_metadata" mağazanın imza klasörüdür; paketlenmemiş yüklemede reddedilir.
         if rel.components().next().is_some_and(|c| c.as_os_str() == "_metadata") {
             continue;
@@ -196,14 +249,20 @@ impl App {
     }
 
     /// Mağazadaki uzantıyı indirip kurar.
-    pub(super) fn install_store(&mut self, id: String) {
-        if self.installing || self.state.store_installs.contains_key(&id) {
+    pub(super) fn install_store(&mut self, id: String) { self.install_store_package(id, false); }
+    pub(super) fn update_extension(&mut self, installed: &str) {
+        let store = self.state.store_installs.iter().find(|(_, id)| id.as_str() == installed).map(|(store, _)| store.clone());
+        if let Some(store) = store { self.install_store_package(store, true); }
+    }
+    fn install_store_package(&mut self, id: String, update: bool) {
+        if id.len() != 32 || !id.bytes().all(|b| (b'a'..=b'p').contains(&b)) || self.installing || (!update && self.state.store_installs.get(&id).is_some_and(|installed| self.extensions.iter().any(|e| &e.id == installed))) {
             return;
         }
+        self.pending_update_enabled = if update { self.state.store_installs.get(&id).and_then(|installed| self.extensions.iter().find(|e| &e.id == installed)).map(|e| e.enabled) } else { None };
         self.installing = true;
         self.animate();
         let major = if self.browser_major > 0 { self.browser_major } else { 130 };
-        let dir = state::root().join("extensions").join(&id);
+        let dir = state::root().join("extensions").join(format!("{id}-{}", crate::history::now_iso().replace([':', '.'], "-")));
         self.pending_install = Some((id.clone(), dir.clone()));
         std::thread::spawn(move || {
             let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
@@ -211,8 +270,8 @@ impl App {
                 "https://clients2.google.com/service/update2/crx?response=redirect&prodversion={major}.0&acceptformat=crx2,crx3&x=id%3D{id}%26uc"
             );
             let temp = std::env::temp_dir().join(format!("sqywein-{id}.crx"));
-            let result = if download_file(&url, &temp) {
-                std::fs::read(&temp).map_err(|e| e.to_string()).and_then(|bytes| unpack(&bytes, &dir)).map(|_| dir)
+            let result = if let Some(bytes) = crate::net::fetch(&url, 64 * 1024 * 1024) {
+                unpack(&bytes, &dir).and_then(|_| bind_store_identity(&bytes, &id, &dir)).map(|_| dir)
             } else {
                 Err("İndirilemedi".into())
             };
@@ -222,9 +281,27 @@ impl App {
         self.invalidate();
     }
 
+    fn extension_status(&self, ok: bool, message: &str) {
+        let json = serde_json::json!({"type":"extensions.status","ok":ok,"message":message}).to_string();
+        for t in &self.tabs { if t.url == url::internal("extensions") { if let Some(v) = &t.view { engine::post_json(v, &json); } } }
+    }
     pub(super) fn on_extension_unpacked(&mut self, result: std::result::Result<PathBuf, String>) {
+        if let Err(error) = &result { self.extension_status(false, error); }
         match (result, self.any_view()) {
-            (Ok(dir), Some(view)) => engine::add_extension(&view, &dir),
+            (Ok(dir), Some(_)) => {
+                let Some(m) = manifest(&dir) else { self.installing = false; self.pending_install = None; return };
+                let name = m["name"].as_str().unwrap_or("Uzantı");
+                let privileges: Vec<_> = ["permissions", "host_permissions"].iter().flat_map(|k| m[*k].as_array().into_iter().flatten()).filter_map(Value::as_str).collect();
+                let text = format!("{} kurulacak.\n\nİstenen izinler:\n{}\n\nKurulsun mu?", name, if privileges.is_empty() { "Ek izin yok".into() } else { privileges.join("\n") });
+                let hwnd = self.hwnd;
+                defer(move || {
+                    let allowed = unsafe { MessageBoxW(Some(hwnd), &HSTRING::from(&text), w!("Uzantı izinleri"), MB_YESNO | MB_ICONQUESTION) } == IDYES;
+                    with_app(|app| {
+                        if allowed { if let Some(v) = app.any_view() { engine::add_extension(&v, &dir); return; } }
+                        app.installing = false; app.pending_install = None; app.invalidate();
+                    });
+                });
+            },
             _ => {
                 self.installing = false;
                 self.pending_install = None;
@@ -233,11 +310,18 @@ impl App {
         }
     }
 
-    pub(super) fn on_extension_added(&mut self, id: Option<String>) {
+    pub(super) fn on_extension_added(&mut self, extension: Option<ICoreWebView2BrowserExtension>) {
+        if let (Some(ext), Some(enabled)) = (&extension, self.pending_update_enabled.take()) { engine::enable_extension(ext, enabled); }
+        let id = extension.map(|ext| engine::string(|p| unsafe { ext.Id(p) }));
         self.installing = false;
+        if id.is_none() { self.pending_update_enabled = None; self.extension_status(false, "Uzantı kurulamadı. WebView2 desteğini ve uzantı manifestini kontrol et."); }
+        else { self.extension_status(true, "Uzantı kuruldu veya güncellendi."); }
         if let (Some(id), Some((store, dir))) = (id, self.pending_install.take()) {
             if !store.is_empty() {
-                self.state.store_installs.insert(store, id.clone());
+                if let Some(old) = self.state.store_installs.insert(store, id.clone()).filter(|old| old != &id) {
+                    if let Some(e) = self.extensions.iter().find(|e| e.id == old) { engine::remove_extension(&e.ext); }
+                    for pinned in &mut self.state.pinned_extensions { if pinned == &old { *pinned = id.clone(); } }
+                }
             }
             self.state.extension_folders.insert(id, dir.to_string_lossy().into_owned());
             self.dirty = true;
@@ -254,8 +338,10 @@ impl App {
             if let Some(folder) = folder {
                 with_app(|app| {
                     if let Some(view) = app.any_view() {
+                        let _ = view;
                         app.pending_install = Some((String::new(), folder.clone()));
-                        engine::add_extension(&view, &folder);
+                        app.installing = true;
+                        app.on_extension_unpacked(Ok(folder));
                     }
                 });
             }
@@ -327,7 +413,7 @@ impl App {
             return;
         };
         unsafe {
-            let dark: i32 = 1;
+            let dark: i32 = i32::from(is_dark());
             let _ = DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark as *const _ as _, 4);
             let corner = DWMWCP_ROUND;
             let _ = DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &corner as *const _ as _, 4);
@@ -346,7 +432,7 @@ impl App {
             unsafe { let _ = ctrl.Close(); }
             return;
         };
-        let Ok(view) = engine::configure(&ctrl, POPUP_VIEW, RAISED, &self.state.settings) else { return };
+        let Ok(view) = engine::configure(&ctrl, POPUP_VIEW, raised(), &self.state.settings) else { return };
         let mut rc = RECT::default();
         unsafe {
             let _ = GetClientRect(popup.hwnd, &mut rc);
@@ -356,6 +442,17 @@ impl App {
             let _ = ctrl.MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
         }
         popup.ctrl = Some(ctrl);
+    }
+
+    pub(super) fn cleanup_auth_popups(&mut self, all: bool) {
+        if all { for (_, popup) in self.auth_popups.drain() { self.retired_auth.push((Instant::now(), popup)); } }
+        let mut keep = Vec::new();
+        for (when, popup) in self.retired_auth.drain(..) {
+            if !all && when.elapsed() < Duration::from_secs(1) { keep.push((when, popup)); continue; }
+            if let Some(c) = popup.ctrl { unsafe { let _ = c.Close(); } }
+            let hwnd = popup.hwnd; defer(move || unsafe { let _ = DestroyWindow(hwnd); });
+        }
+        self.retired_auth = keep;
     }
 
     pub(super) fn close_popup(&mut self) {
@@ -385,7 +482,7 @@ impl App {
                 let mut ps = PAINTSTRUCT::default();
                 unsafe {
                     let hdc = BeginPaint(hwnd, &mut ps);
-                    let brush = CreateSolidBrush(COLORREF(colorref(RAISED)));
+                    let brush = CreateSolidBrush(COLORREF(colorref(raised())));
                     FillRect(hdc, &ps.rcPaint, brush);
                     let _ = DeleteObject(brush.into());
                     let _ = EndPaint(hwnd, &ps);
@@ -416,6 +513,7 @@ impl App {
                     "enabled": e.enabled,
                     "pinned": self.state.pinned_extensions.contains(&e.id),
                     "icon": icon,
+                    "updatable": self.state.store_installs.values().any(|id| id == &e.id),
                 })
             })
             .collect();
@@ -439,6 +537,13 @@ unsafe fn pick_folder(owner: HWND) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejects_truncated_package_metadata() {
+        assert!(protobuf_fields(&[0x12, 0xff]).is_none());
+        assert!(store_public_key(b"Cr24", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").is_none());
+        assert!(varint(&mut &[0xff; 10][..]).is_none());
+    }
 
     #[test]
     fn magaza_kimligi() {
@@ -472,6 +577,8 @@ mod tests {
         assert!(download_file(&url, &crx), "indirilemedi");
         let bytes = std::fs::read(&crx).unwrap();
         unpack(&bytes, &dir).unwrap();
+        assert!(store_public_key(&bytes, id).is_some(), "mağaza kimliği eşleşmiyor");
+        bind_store_identity(&bytes, id, &dir).unwrap();
         let m = manifest(&dir).expect("manifest yok");
         assert!(icon_path(&m).is_some());
         assert!(popup_path(&m).is_some());

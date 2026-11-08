@@ -96,8 +96,8 @@ impl App {
 
     pub(super) fn paint_update_pill(&self, r: Rect) {
         let g = &self.gfx;
-        g.round(r, 12.0, if self.hover == Hit::Update { INK } else { accent() });
-        g.text("Güncelle", r, Font::Small, BASE, Align::Center);
+        g.round(r, 12.0, if self.hover == Hit::Update { ink() } else { accent() });
+        g.text("Güncelle", r, Font::Small, base(), Align::Center);
     }
 }
 

@@ -100,9 +100,11 @@ fn old_exe(current: &Path) -> PathBuf {
 pub fn install(new_exe: &Path) -> std::io::Result<PathBuf> {
     let current = std::env::current_exe()?;
     let old = old_exe(&current);
+    let staged = current.with_file_name("sqywein.next.exe");
+    std::fs::copy(new_exe, &staged)?;
     let _ = std::fs::remove_file(&old);
     std::fs::rename(&current, &old)?;
-    if let Err(e) = std::fs::copy(new_exe, &current) {
+    if let Err(e) = std::fs::rename(&staged, &current) {
         // Yarım kalırsa eski sürüm geri konur.
         let _ = std::fs::rename(&old, &current);
         return Err(e);

@@ -49,6 +49,9 @@ pub enum MenuCmd {
     Find,
     DevTools,
     Settings,
+    NetworkLogin,
+    OpenCompatible(u32),
+    SitePermissions,
     Exit,
     SignIn,
     ManageAccount,
@@ -70,6 +73,8 @@ pub enum MenuCmd {
     TabReload,
     TabDuplicate,
     TabSleep,
+    TabPin,
+    TabMute,
     TabSleepOthers,
     TabCloseOthers,
     TabCloseRight,
@@ -160,9 +165,12 @@ pub struct Menu {
     size: (u32, u32),
     /// Açılış animasyonu: başladığı an ve hedef konum (ekran pikseli).
     fade: Option<(std::time::Instant, POINT)>,
+    alpha: u8,
+    exit_alpha: u8,
+    exiting: bool,
 }
 
-const FADE_MS: f32 = 140.0;
+const FADE_MS: f32 = 160.0;
 const FADE_TIMER: usize = 1;
 
 /// Profil rengi "#AF85FC" → 0xAF85FC.
@@ -178,7 +186,7 @@ pub fn avatar(g: &Gfx, r: Rect, photo: Option<&Image>, color: Rgb, name: &str) {
             g.circle(r.cx(), r.cy(), r.w / 2.0, color);
             let letter: String = name.chars().next().map(|c| c.to_uppercase().collect()).unwrap_or_default();
             let font = if r.w >= 30.0 { Font::UiBold } else { Font::Small };
-            g.text(&letter, r, font, BASE, Align::Center);
+            g.text(&letter, r, font, base(), Align::Center);
         }
     }
 }
@@ -192,8 +200,10 @@ impl Menu {
         unsafe {
             let instance: HINSTANCE = GetModuleHandleW(None)?.into();
             // Katmanlı pencere: açılırken saydamlıktan netliğe geçer.
+            // Camda katmanlı pencere kullanılamaz (Windows camı çizmez): o zaman yalnızca kayarak açılır.
+            let glass = crate::theme::glass();
             let hwnd = CreateWindowExW(
-                WS_EX_TOOLWINDOW | WS_EX_LAYERED,
+                WS_EX_TOOLWINDOW | if glass { WINDOW_EX_STYLE(0) } else { WS_EX_LAYERED },
                 CLASS,
                 w!(""),
                 WS_POPUP,
@@ -206,18 +216,21 @@ impl Menu {
                 Some(instance),
                 None,
             )?;
-            let dark: i32 = 1;
+            let dark: i32 = i32::from(is_dark());
             let _ = DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark as *const _ as _, 4);
             let corner = DWMWCP_ROUND;
             let _ = DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &corner as *const _ as _, 4);
-            let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 0, LWA_ALPHA);
+            let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), if motion_enabled() { 0 } else { 255 }, LWA_ALPHA);
             let target = POINT { x: anchor.x - wpx, y: anchor.y };
-            let _ = SetWindowPos(hwnd, None, target.x, target.y - (6.0 * s) as i32, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-            SetTimer(Some(hwnd), FADE_TIMER, 10, None);
+            let _ = SetWindowPos(hwnd, None, target.x, target.y - if motion_enabled() { (5.0 * s) as i32 } else { 0 }, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+            if motion_enabled() { SetTimer(Some(hwnd), FADE_TIMER, 16, None); }
             let mut gfx = Gfx::new()?;
             gfx.hardware = hardware;
             gfx.set_dpi(dpi);
-            Ok(Self { hwnd, kind, gfx, items, hover: None, zoom, dpi, size: (wpx as u32, hpx as u32), fade: Some((std::time::Instant::now(), target)) })
+            if glass && crate::app::apply_backdrop(hwnd, true) {
+                gfx.set_glass(true);
+            }
+            Ok(Self { hwnd, kind, gfx, items, hover: None, zoom, dpi, size: (wpx as u32, hpx as u32), fade: if motion_enabled() { Some((std::time::Instant::now(), target)) } else { None }, alpha: if motion_enabled() { 0 } else { 255 }, exit_alpha: 255, exiting: false })
         }
     }
 
@@ -322,12 +335,14 @@ impl Menu {
     /// Açılış animasyonunun bir adımı (menü zamanlayıcısından çağrılır).
     pub fn fade_step(&mut self) {
         let Some((start, target)) = self.fade else { return };
-        let t = (start.elapsed().as_secs_f32() * 1000.0 / FADE_MS).min(1.0);
+        let duration = if self.exiting { 90.0 } else { FADE_MS };
+        let t = if motion_enabled() { (start.elapsed().as_secs_f32() * 1000.0 / duration).min(1.0) } else { 1.0 };
         let e = ease_out(t);
         let s = self.dpi as f32 / 96.0;
         unsafe {
-            let _ = SetLayeredWindowAttributes(self.hwnd, COLORREF(0), (e * 255.0) as u8, LWA_ALPHA);
-            let y = target.y - ((1.0 - e) * 6.0 * s) as i32;
+            self.alpha = if self.exiting { ((1.0 - e) * self.exit_alpha as f32) as u8 } else { (e * 255.0) as u8 };
+            let _ = SetLayeredWindowAttributes(self.hwnd, COLORREF(0), self.alpha, LWA_ALPHA);
+            let y = if self.exiting { target.y + (e * 3.0 * s) as i32 } else { target.y - ((1.0 - e) * 5.0 * s) as i32 };
             let _ = SetWindowPos(self.hwnd, None, target.x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
             if t >= 1.0 {
                 let _ = KillTimer(Some(self.hwnd), FADE_TIMER);
@@ -335,6 +350,20 @@ impl Menu {
             }
         }
     }
+
+    pub fn start_exit(&mut self) -> bool {
+        if !motion_enabled() { return false; }
+        let mut rect = RECT::default();
+        unsafe {
+            if GetWindowRect(self.hwnd, &mut rect).is_err() { return false; }
+            self.exiting = true;
+            self.exit_alpha = self.alpha;
+            self.fade = Some((std::time::Instant::now(), POINT { x: rect.left, y: rect.top }));
+            SetTimer(Some(self.hwnd), FADE_TIMER, 16, None);
+        }
+        true
+    }
+    pub fn exit_finished(&self) -> bool { self.exiting && self.fade.is_none() }
 
     /// Menü açıkken içeriği değişti (ör. uzantı sabitlendi).
     pub fn set_items(&mut self, items: Vec<Item>) {
@@ -359,42 +388,48 @@ impl Menu {
             return;
         }
         let g = &self.gfx;
-        g.clear(RAISED);
         let full = Rect::new(0.0, 0.0, MENU_WIDTH, h as f32 * 96.0 / self.dpi as f32);
-        g.round_outline(full, 8.0, LINE, 1.0);
+        if crate::theme::glass() {
+            g.clear_transparent();
+            let (c, a) = crate::theme::menu_tint();
+            g.fill_alpha(full, c, a);
+        } else {
+            g.clear(raised());
+        }
+        g.round_outline_alpha(full, 8.0, line(), 1.0, 0.8);
 
         for (i, (item, r)) in self.items.iter().zip(self.rows()).enumerate() {
             match item {
                 Item::Header(head) => {
                     let card = r.inset(8.0, 4.0);
-                    g.round(card, 10.0, HOVER);
+                    g.round(card, 10.0, hover());
                     avatar(g, Rect::new(card.x + 12.0, card.cy() - 20.0, 40.0, 40.0), head.avatar.as_deref(), head.color, &head.title);
-                    g.text(&head.title, Rect::new(card.x + 64.0, card.y + 12.0, card.w - 74.0, 20.0), Font::UiBold, INK, Align::Left);
-                    g.text(&head.sub, Rect::new(card.x + 64.0, card.y + 33.0, card.w - 74.0, 18.0), Font::Small, MUTED, Align::Left);
+                    g.text(&head.title, Rect::new(card.x + 64.0, card.y + 12.0, card.w - 74.0, 20.0), Font::UiBold, ink(), Align::Left);
+                    g.text(&head.sub, Rect::new(card.x + 64.0, card.y + 33.0, card.w - 74.0, 18.0), Font::Small, muted(), Align::Left);
                 }
                 Item::Action { label, hint, enabled, side, icon, .. } => {
                     let row_hover = self.hover == Some(Part::Row(i));
                     let side_hover = self.hover == Some(Part::Side(i));
                     if *enabled && (row_hover || side_hover) {
-                        g.round(r.inset(6.0, 1.0), 6.0, HOVER);
+                        g.round(r.inset(6.0, 1.0), 6.0, hover());
                     }
                     let mut x = r.x + 16.0;
                     if let Some(img) = icon {
                         g.image(img, Rect::new(x, r.cy() - 8.0, 16.0, 16.0), false);
                         x += 26.0;
                     }
-                    let color = if *enabled { INK } else { FAINT };
+                    let color = if *enabled { ink() } else { faint() };
                     let reserve = if hint.is_empty() && side.is_none() { 16.0 } else { SIDE_W + 8.0 };
                     g.text(label, Rect::new(x, r.y, r.right() - x - reserve, r.h), Font::Ui, color, Align::Left);
                     let hint_r = Rect::new(r.right() - SIDE_W - 14.0, r.y, SIDE_W, r.h);
                     if side.is_some() && side_hover {
-                        g.round(hint_r.inset(0.0, 5.0), 6.0, LINE);
+                        g.round(hint_r.inset(0.0, 5.0), 6.0, line());
                     }
-                    g.text(hint, hint_r.inset(6.0, 0.0), Font::Small, if side.is_some() { MUTED } else { FAINT }, Align::Right);
+                    g.text(hint, hint_r.inset(6.0, 0.0), Font::Small, if side.is_some() { muted() } else { faint() }, Align::Right);
                 }
-                Item::Sep => g.fill(Rect::new(r.x + 10.0, r.cy(), r.w - 20.0, 1.0), LINE),
+                Item::Sep => g.fill(Rect::new(r.x + 10.0, r.cy(), r.w - 20.0, 1.0), line()),
                 Item::Slider { title, level } => {
-                    g.text(title, Rect::new(r.x + 12.0, r.y + 8.0, r.w - 24.0, 24.0), Font::UiBold, INK, Align::Center);
+                    g.text(title, Rect::new(r.x + 12.0, r.y + 8.0, r.w - 24.0, 24.0), Font::UiBold, ink(), Align::Center);
                     let (x0, x1, cy) = Self::slider_track(r);
                     let step = (x1 - x0) / 3.0;
                     let at = |n: u8| x0 + n as f32 * step;
@@ -402,22 +437,22 @@ impl Menu {
                     for n in 0..3u8 {
                         let seg = Rect::new(at(n) + 1.0, cy - 7.0, step - 2.0, 14.0);
                         let filled = n < *level;
-                        g.round_alpha(seg, 4.0, if filled { accent() } else { LINE }, if filled { 0.85 } else { 1.0 });
+                        g.round_alpha(seg, 4.0, if filled { accent() } else { line() }, if filled { 0.85 } else { 1.0 });
                     }
                     for n in 0..=3u8 {
                         if self.hover == Some(Part::Level(n)) && n != *level {
-                            g.round(Rect::new(at(n) - 14.0, cy - 14.0, 28.0, 28.0), 8.0, HOVER);
+                            g.round(Rect::new(at(n) - 14.0, cy - 14.0, 28.0, 28.0), 8.0, hover());
                         }
                     }
                     let knob = Rect::new(at(*level) - 22.0, cy - 22.0, 44.0, 44.0);
                     g.round(knob, 12.0, accent());
-                    g.text("filtreleme modu", Rect::new(r.x, cy + 28.0, r.w, 18.0), Font::Small, MUTED, Align::Center);
+                    g.text("filtreleme modu", Rect::new(r.x, cy + 28.0, r.w, 18.0), Font::Small, muted(), Align::Center);
                     let name = crate::adblock::LEVEL_NAMES[*level as usize];
                     g.text(name, Rect::new(r.x, cy + 46.0, r.w, 20.0), Font::UiBold, accent(), Align::Center);
                 }
                 Item::Download(d) => {
                     if self.hover == Some(Part::Row(i)) && d.done {
-                        g.round(r.inset(6.0, 2.0), 8.0, HOVER);
+                        g.round(r.inset(6.0, 2.0), 8.0, hover());
                     }
                     let icon = Rect::new(r.x + 14.0, r.cy() - 16.0, 32.0, 32.0);
                     match &d.icon {
@@ -428,41 +463,41 @@ impl Menu {
                             g.set_opacity(1.0);
                         }
                         None => {
-                            g.round(icon, 8.0, if d.done { accent() } else { HOVER });
-                            g.text(ICON_DOC, icon, Font::Icon, if d.done { BASE } else { INK }, Align::Center);
+                            g.round(icon, 8.0, if d.done { accent() } else { hover() });
+                            g.text(ICON_DOC, icon, Font::Icon, if d.done { base() } else { ink() }, Align::Center);
                         }
                     }
                     let tx = icon.right() + 12.0;
                     let tw = r.right() - tx - 58.0;
-                    g.text(&d.name, Rect::new(tx, r.y + 9.0, tw, 20.0), Font::UiBold, INK, Align::Left);
-                    g.text(&d.line, Rect::new(tx, r.y + 29.0, tw, 18.0), Font::Small, MUTED, Align::Left);
+                    g.text(&d.name, Rect::new(tx, r.y + 9.0, tw, 20.0), Font::UiBold, ink(), Align::Left);
+                    g.text(&d.line, Rect::new(tx, r.y + 29.0, tw, 18.0), Font::Small, muted(), Align::Left);
                     if let Some(p) = d.progress {
                         let bar = Rect::new(tx, r.y + 50.0, tw, 3.0);
-                        g.round(bar, 1.5, LINE);
+                        g.round(bar, 1.5, line());
                         g.round(Rect::new(bar.x, bar.y, (bar.w * p.clamp(0.0, 1.0)).max(3.0), bar.h), 1.5, accent());
                     }
                     let side = Rect::new(r.right() - 48.0, r.cy() - 16.0, 32.0, 32.0);
                     if self.hover == Some(Part::Side(i)) {
-                        g.round(side, 8.0, LINE);
+                        g.round(side, 8.0, line());
                     }
                     if d.done {
-                        g.text(ICON_FOLDER, side, Font::Icon, INK, Align::Center);
+                        g.text(ICON_FOLDER, side, Font::Icon, ink(), Align::Center);
                     } else if d.progress.is_some() {
-                        g.text(ICON_CLOSE, side, Font::SmallIcon, MUTED, Align::Center);
+                        g.text(ICON_CLOSE, side, Font::SmallIcon, muted(), Align::Center);
                     }
                 }
                 Item::Zoom => {
                     let enabled = self.zoom.is_some();
-                    g.text("Yakınlaştır", Rect::new(r.x + 16.0, r.y, 120.0, r.h), Font::Ui, if enabled { INK } else { FAINT }, Align::Left);
+                    g.text("Yakınlaştır", Rect::new(r.x + 16.0, r.y, 120.0, r.h), Font::Ui, if enabled { ink() } else { faint() }, Align::Left);
                     let (minus, value, plus) = Self::zoom_buttons(r);
                     for (b, part, icon) in [(minus, Part::Minus, ICON_REMOVE), (plus, Part::Plus, ICON_ADD)] {
                         if enabled && self.hover == Some(part) {
-                            g.round(b, 6.0, HOVER);
+                            g.round(b, 6.0, hover());
                         }
-                        g.text(icon, b, Font::MidIcon, if enabled { INK } else { FAINT }, Align::Center);
+                        g.text(icon, b, Font::MidIcon, if enabled { ink() } else { faint() }, Align::Center);
                     }
                     let pct = self.zoom.map(|z| format!("%{}", (z * 100.0).round() as i32)).unwrap_or_else(|| "—".into());
-                    g.text(&pct, value, Font::Ui, if enabled { INK } else { FAINT }, Align::Center);
+                    g.text(&pct, value, Font::Ui, if enabled { ink() } else { faint() }, Align::Center);
                 }
             }
         }

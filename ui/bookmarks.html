@@ -1,9 +1,17 @@
 <!doctype html>
 <html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self'; img-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'"><title>Yer işaretleri</title><link rel="stylesheet" href="/app.css"><script src="/app.js"></script></head>
 <body><main class="main" id="main" tabindex="-1"><div class="content"><h1>Yer işaretleri</h1><p class="subtitle">Yeniden gelmek isteyeceğin yerler.</p><div class="toolbar"><label class="search"><span class="sr-only">Yer işaretlerinde ara</span><input id="search" type="search" placeholder="Yer işaretlerinde ara" autocomplete="off"></label></div><div id="results" aria-busy="true"><p class="loading" role="status">Yer işaretleri yükleniyor…</p></div><p class="count">Sıralamak için sürükle veya yukarı / aşağı düğmelerini kullan.</p><p id="reorder-status" class="sr-only" role="status"></p></div></main>
-<script>
+<div class="content"><label for="bookmark-import">Chrome/Edge yer işaretlerini içe aktar (HTML)</label><input id="bookmark-import" type="file" accept=".html,.htm,text/html"><p id="bookmark-import-result" role="status"></p></div><script>
 'use strict';
 initPage('bookmarks');
+document.getElementById('bookmark-import').addEventListener('change',async event=>{
+ const file=event.target.files[0];if(!file)return;
+ if(file.size>5*1024*1024){notify('Dosya 5 MB sınırını aşıyor.');return;}
+ const doc=new DOMParser().parseFromString(await file.text(),'text/html');
+ const items=[...doc.querySelectorAll('a[href]')].filter(a=>/^https?:/i.test(a.getAttribute('href'))).slice(0,5000).map(a=>({title:a.textContent.trim(),url:a.getAttribute('href')}));
+ send('bookmarks.import',{items});event.target.value='';
+});
+on('bookmarks.import',d=>{document.getElementById('bookmark-import-result').textContent=`${d.added} yer işareti eklendi.`;send('bookmarks.list');});
 let items=[];let dragged=null;
 const results=document.getElementById('results');const search=document.getElementById('search');
 function mutate(type,payload){send(type,payload);send('bookmarks.list');}
@@ -18,7 +26,7 @@ function render(){
     const link=openLink(item.title,item.url);const title=el('div',{},link);let clickTimer;
     const edit=() => {row.draggable=false;inlineEdit(title,item.title,value => {row.draggable=true;mutate('bookmarks.rename',{url:item.url,title:value});},() => {row.draggable=true;});};
     // Delay unmodified title clicks briefly so a double-click can enter rename.
-    link.addEventListener('click',event => {if(event.ctrlKey || event.metaKey || event.button!==0)return;event.preventDefault();event.stopImmediatePropagation();clearTimeout(clickTimer);if(safeURL(item.url)!=='#')clickTimer=setTimeout(() => send('open',{url:item.url,newTab:false}),250);},true);
+    link.addEventListener('click',event => {if(event.ctrlKey || event.metaKey || event.button!==0)return;event.preventDefault();event.stopImmediatePropagation();clearTimeout(clickTimer);if(safeURL(item.url)!=='#')clickTimer=setTimeout(() => send('open',{url:item.url,newTab:true}),250);},true);
     link.addEventListener('dblclick',event => {event.preventDefault();clearTimeout(clickTimer);edit();});
     const info=el('div',{class:'row-main',ondblclick:event => {if(!event.target.closest('a,input,button'))edit();}},title,el('div',{class:'detail'},host(item.url)));
     const actions=el('div',{class:'actions'},action('Adını değiştir',edit),action('Yukarı taşı',() => move(index,index-1),null,{'aria-label':`${item.title}: yukarı taşı`,disabled:index===0}),action('Aşağı taşı',() => move(index,index+1),null,{'aria-label':`${item.title}: aşağı taşı`,disabled:index===items.length-1}),action('Yer işaretini sil',() => mutate('bookmarks.remove',{url:item.url}),'delete'));

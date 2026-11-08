@@ -48,11 +48,50 @@ impl App {
             "history.clear" => {
                 self.history.clear();
                 if let Some(view) = self.any_view() {
-                    engine::clear_data(&view, &["history".into()]);
+                    engine::clear_data(&view, &["history".into()], self.state.current_profile.clone(), None);
                 }
                 Some(self.history_json("", 500))
             }
             // Yer işaretleri
+            "permissions.list" => { if let Some(v) = self.any_view() { engine::list_permissions(&v, tab_id); } None }
+            "permissions.set" => {
+                let origin = s("origin"); let kind = msg["kind"].as_i64().unwrap_or(-1) as i32; let state = msg["state"].as_i64().unwrap_or(-1) as i32;
+                if (origin.starts_with("https://") || origin.starts_with("http://")) && [1,2,3,4,6].contains(&kind) && (0..=2).contains(&state) {
+                    if let Some(v) = self.any_view() { engine::set_permission(&v, tab_id, &origin, kind, state); }
+                }
+                None
+            }
+            "system.defaultBrowser" => {
+                match crate::integration::open_default_settings() {
+                    Ok(()) => Some(json!({"type":"system.result","ok":true})),
+                    Err(e) => Some(json!({"type":"system.result","ok":false,"error":e.to_string()})),
+                }
+            }
+            "settings.reset" => {
+                self.state.settings = state::Settings::default();
+                set_accent(&self.state.settings.accent);
+                set_motion(self.state.settings.animations);
+                set_theme(&self.state.settings.theme);
+                self.refresh_theme();
+                self.set_adblock_enabled(self.state.settings.adblock);
+                self.apply_adblock_levels();
+                self.dirty = true;
+                self.layout_children();
+                Some(self.settings_json())
+            }
+            "bookmarks.import" => {
+                let mut added = 0;
+                if let Some(items) = msg["items"].as_array() {
+                    for item in items.iter().take(5000) {
+                        let Some(u) = item["url"].as_str().filter(|s| s.len() <= 8192 && (s.starts_with("https://") || s.starts_with("http://"))) else { continue };
+                        if self.state.favorites.iter().any(|b| b.url == u) { continue; }
+                        let title = item["title"].as_str().unwrap_or(u).chars().take(500).collect();
+                        self.state.favorites.push(state::Bookmark { title, url: u.to_string() }); added += 1;
+                    }
+                }
+                self.dirty = true; self.invalidate(); self.notify_pages("bookmarks");
+                Some(json!({"type":"bookmarks.import","added":added}))
+            }
             "bookmarks.list" => Some(self.bookmarks_json()),
             "bookmarks.remove" => {
                 let u = s("url");
@@ -107,6 +146,7 @@ impl App {
                 self.refresh_extensions();
                 Some(self.extensions_json())
             }
+            "extensions.update" => { self.update_extension(&s("id")); None }
             "extensions.toggle" => {
                 self.enable_extension(&s("id"), msg["enabled"].as_bool().unwrap_or(true));
                 None
@@ -124,6 +164,12 @@ impl App {
                 None
             }
             // Ayarlar
+            "sq.rest.result" => {
+                if let (Some(epoch), Some(discard), Some(safe)) = (msg["epoch"].as_u64(), msg["discard"].as_bool(), msg["safe"].as_bool()) { engine::push(Event::SleepChecked(tab_id, epoch, discard, safe)); }
+                None
+            }
+            "motion.get" => Some(json!({"type":"motion","enabled":motion_enabled()})),
+            "theme.get" => Some(crate::theme::message()),
             "settings.get" => Some(self.settings_json()),
             "update.check" => {
                 self.check_updates();
@@ -138,6 +184,11 @@ impl App {
                 None
             }
             "settings.set" => {
+                if s("key") == "downloadFolder" && !msg["value"].as_str().unwrap_or("").is_empty() && !std::path::Path::new(msg["value"].as_str().unwrap_or("")).is_dir() {
+                    let reply = json!({"type":"settings.error","error":"Klasör bulunamadı. Var olan bir klasörün tam yolunu yaz."});
+                    if let Some(v) = self.index_of(tab_id).and_then(|i| self.tabs[i].view.as_ref()) { engine::post_json(v, &reply.to_string()); }
+                    return;
+                }
                 self.set_setting(&s("key"), &msg["value"]);
                 None
             }
@@ -147,11 +198,17 @@ impl App {
                     self.history.clear();
                 }
                 if let Some(view) = self.any_view() {
-                    engine::clear_data(&view, &kinds);
+                    if kinds.iter().any(|k| k == "cookies") { self.clear_saved_cookies(); }
+                    self.clearing_data.insert(self.state.current_profile.clone());
+                    engine::clear_data(&view, &kinds, self.state.current_profile.clone(), Some(tab_id));
                 }
                 None
             }
             "profiles.switch" => {
+                if self.installing {
+                    if let Some(v) = self.index_of(tab_id).and_then(|i| self.tabs[i].view.as_ref()) { engine::post_json(v, &json!({"type":"settings.error","error":"Uzantı kurulumu bitince profil değiştirebilirsin."}).to_string()); }
+                    return;
+                }
                 if let Some(i) = self.state.profiles.iter().position(|p| p.id == s("id")) {
                     self.switch_profile(i);
                 }
@@ -214,6 +271,8 @@ impl App {
         json!({
             "type": "settings.get",
             "settings": self.state.settings,
+            "defaultBrowser": crate::integration::is_default_browser(),
+            "motion": motion_enabled(),
             "profiles": self.profiles_json(),
             "about": { "version": env!("CARGO_PKG_VERSION"), "engine": format!("WebView2 {engine}") },
             "adblock": { "updated": crate::adblock::updated_label() },
@@ -226,9 +285,26 @@ impl App {
         let b = value.as_bool().unwrap_or(false);
         let text = value.as_str().unwrap_or("").to_string();
         match key {
-            "searchEngine" => st.search_engine = text,
+            "neverSleep" => st.never_sleep = text.split(',').map(str::trim).filter(|s| !s.is_empty()).map(|s| url::host(s).to_ascii_lowercase()).take(200).collect(),
+            "downloadFolder" => {
+                if !text.is_empty() && !std::path::Path::new(&text).is_dir() { return; }
+                st.download_folder = text.clone();
+                for v in self.tabs.iter().filter_map(|t| t.view.as_ref()) {
+                    if text.is_empty() { engine::set_download_folder(v); } else if let Some(p) = engine::profile(v) { unsafe { let _ = p.SetDefaultDownloadFolderPath(&HSTRING::from(&text)); } }
+                }
+            }
+            "searchEngine" if ["google", "bing", "duckduckgo", "yandex", "brave"].contains(&text.as_str()) => st.search_engine = text,
             "startup" => st.startup = text,
+            "animations" => {
+                st.animations = b; set_motion(b); self.animate();
+                let json = json!({"type":"motion","enabled":motion_enabled()}).to_string();
+                for t in &self.tabs { if url::is_internal(&t.url) { if let Some(v) = &t.view { engine::post_json(v, &json); } } }
+            },
             "freezeTabs" => st.freeze_tabs = b,
+            "glass" => { st.glass = b; self.update_glass(); }
+            "theme" if ["light","dark","sqywein","system"].contains(&text.as_str()) => {
+                st.theme = text; set_theme(&st.theme); self.refresh_theme();
+            }
             "sleepTabs" => st.sleep_tabs = b,
             "hardwareAcceleration" => st.hardware_acceleration = b, // Yeniden başlatınca geçerli.
             "searchSuggestions" => st.search_suggestions = b,
@@ -236,18 +312,7 @@ impl App {
             "accent" => {
                 st.accent = text;
                 set_accent(&st.accent);
-                // Açık iç sayfalar yeniden yüklenmeden yeni renge geçer.
-                let msg = json!({ "type": "theme", "accent": hex(accent()) }).to_string();
-                for t in &self.tabs {
-                    if url::is_internal(&t.url) {
-                        if let Some(v) = &t.view {
-                            engine::post_json(v, &msg);
-                        }
-                    }
-                }
-                if let Some(m) = &self.menu {
-                    unsafe { let _ = InvalidateRect(Some(m.hwnd), None, false); }
-                }
+                self.refresh_theme();
             }
             "adblock" => {
                 self.set_adblock_enabled(b);
@@ -285,11 +350,11 @@ impl App {
                 } else {
                     st.autofill = b;
                 }
-                let (pw, af) = (st.save_passwords, st.autofill);
+                let af = st.autofill;
                 for v in self.tabs.iter().filter_map(|t| t.view.as_ref()) {
                     if let Ok(s4) = unsafe { v.Settings() }.and_then(|s| s.cast::<ICoreWebView2Settings4>()) {
                         unsafe {
-                            let _ = s4.SetIsPasswordAutosaveEnabled(pw);
+                            let _ = s4.SetIsPasswordAutosaveEnabled(false);
                             let _ = s4.SetIsGeneralAutofillEnabled(af);
                         }
                     }
@@ -333,7 +398,7 @@ impl App {
         let (status, received, total) = engine::download_progress(&op);
         self.state.download_list.insert(
             0,
-            state::DownloadRecord { id, name, path, url: link, status: status.into(), received, total, when: crate::history::now_iso() },
+            state::DownloadRecord { private: self.index_of(tab).is_some_and(|i| self.tabs[i].private), id, name, path, url: link, status: status.into(), received, total, when: crate::history::now_iso() },
         );
         self.state.download_list.truncate(200);
         engine::watch_download(&op, id);
@@ -360,7 +425,7 @@ impl App {
         let exists = d.status == "done" && path.exists();
         let own_icon = matches!(ext.as_str(), "exe" | "msi" | "lnk" | "ico");
         let key = if own_icon && exists { d.path.clone() } else { format!(".{ext}") };
-        if let Some(hit) = self.file_icons.borrow().get(&key) {
+        if let Some(hit) = self.file_icons.borrow_mut().get(&key) {
             return hit.clone();
         }
         let source = if own_icon && exists { d.path.clone() } else { format!("dosya.{ext}") };

@@ -88,9 +88,12 @@ impl History {
         history
     }
 
-    pub fn load() -> Self {
-        Self::load_from(&crate::state::root().join("history.json"))
+    pub fn load() -> Self { Self::load_profile(crate::state::DEFAULT_PROFILE) }
+    pub fn load_profile(profile: &str) -> Self { Self::load_from(&Self::profile_path(profile)) }
+    fn profile_path(profile: &str) -> std::path::PathBuf {
+        crate::state::root().join(if profile == crate::state::DEFAULT_PROFILE { "history.json".into() } else { format!("history-{profile}.json") })
     }
+    pub fn save_profile(&mut self, profile: &str) -> io::Result<()> { self.save_to(&Self::profile_path(profile)) }
 
     fn load_from(path: &Path) -> Self {
         let entries: Vec<HistoryEntry> = fs::read(path).ok()
@@ -225,7 +228,7 @@ pub fn shorten(url: &str) -> String {
 }
 
 fn starts_ignore_case(text: &str, prefix: &str) -> bool {
-    text.get(..prefix.len()).map_or(false, |s| s.eq_ignore_ascii_case(prefix))
+    text.get(..prefix.len()).is_some_and(|s| s.eq_ignore_ascii_case(prefix))
 }
 
 fn fold(text: &str) -> String {
@@ -322,7 +325,7 @@ fn parse_iso(text: &str) -> Option<i128> {
     if b.get(pos) == Some(&b'.') {
         pos += 1;
         let start = pos;
-        while b.get(pos).map_or(false, |c| c.is_ascii_digit()) { pos += 1; }
+        while b.get(pos).is_some_and(|c| c.is_ascii_digit()) { pos += 1; }
         let digits = pos - start;
         if digits == 0 || digits > 7 { return None; }
         fraction = i128::from(number(&b[start..pos])?) * 10_i128.pow(9 - digits as u32);
@@ -360,6 +363,11 @@ fn local_date(time: i128) -> [i64; 6] {
     let ok = unsafe { SystemTimeToTzSpecificLocalTimeEx(std::ptr::null(), &utc, &mut local) };
     if ok == 0 { return date; }
     [local.year.into(), local.month.into(), local.day.into(), local.hour.into(), local.minute.into(), local.second.into()]
+}
+
+/// Şu anki zaman, ISO-8601 (UTC).
+pub fn now_iso() -> String {
+    format_iso(now())
 }
 
 #[cfg(test)]
@@ -546,9 +554,4 @@ mod tests {
         assert_eq!(history.recent("", 2)[0].url, "b");
         assert_eq!(shorten("HTTPS://WWW.Example/a//"), "Example/a/");
     }
-}
-
-/// Şu anki zaman, ISO-8601 (UTC).
-pub fn now_iso() -> String {
-    format_iso(now())
 }

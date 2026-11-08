@@ -21,11 +21,12 @@ on('extensions.list',message => {
     const toggle=el('button',{type:'button',class:'switch',role:'switch','aria-checked':String(!!item.enabled),'aria-label':`${item.name} uzantısını etkinleştir`,onclick:() => mutate('extensions.toggle',{id:item.id,enabled:!item.enabled})});
     const pin=action(item.pinned?'Araç çubuğundan ayır':'Araç çubuğuna sabitle',() => mutate('extensions.pin',{id:item.id,pinned:!item.pinned}),'pin',{'aria-pressed':String(!!item.pinned)});
     const remove=action('Uzantıyı kaldır',event => confirmInline(event.currentTarget,`${item.name} kaldırılsın mı?`,() => mutate('extensions.remove',{id:item.id})),'delete');
-    list.append(el('div',{class:'row',role:'listitem','data-key':item.id},image,el('div',{class:'row-main'},el('div',{class:'title'},item.name),el('div',{class:'detail'},`${item.enabled?'Etkin':'Devre dışı'}${item.pinned?' · Sabitlenmiş':''}`)),el('div',{class:'actions'},pin,remove,toggle)));
+    list.append(el('div',{class:'row',role:'listitem','data-key':item.id},image,el('div',{class:'row-main'},el('div',{class:'title'},item.name),el('div',{class:'detail'},`${item.enabled?'Etkin':'Devre dışı'}${item.pinned?' · Sabitlenmiş':''}`)),el('div',{class:'actions'},item.updatable?action('Güncellemeyi denetle',()=>send('extensions.update',{id:item.id})):null,pin,remove,toggle)));
   }results.append(list);restoreFocus();
 });
 for(const type of ['extensions.toggle','extensions.remove','extensions.pin','extensions.loadUnpacked'])on(type,() => send('extensions.list'));
 document.getElementById('store').addEventListener('click',() => send('open',{url:'https://chromewebstore.google.com/',newTab:true}));
 document.getElementById('load').addEventListener('click',() => send('extensions.loadUnpacked'));
+on('extensions.status',d=>{notify(d.message);send('extensions.list');});
 send('extensions.list');
 </script></body></html>

@@ -34,6 +34,7 @@ pub(super) fn parse_list_accounts(text: &str) -> Option<(String, String, String)
 impl App {
     /// Açık Google hesabını yeniden okur. `force` değilse en fazla dakikada bir.
     pub(super) fn refresh_account(&mut self, force: bool) {
+        if !force && self.state.profile().email.is_empty() { return; }
         let Some(env) = self.env.clone() else { return };
         if !force && self.account_checked.is_some_and(|t| t.elapsed() < Duration::from_secs(60)) {
             return;
@@ -54,7 +55,7 @@ impl App {
 
     pub(super) fn on_account_view_ready(&mut self, ctrl: Option<ICoreWebView2Controller>) {
         let Some(ctrl) = ctrl else { return };
-        let Ok(view) = engine::configure(&ctrl, ACCOUNT_VIEW, BASE, &self.state.settings) else {
+        let Ok(view) = engine::configure(&ctrl, ACCOUNT_VIEW, base(), &self.state.settings) else {
             unsafe { let _ = ctrl.Close(); }
             return;
         };
@@ -128,7 +129,7 @@ impl App {
             Background::ExtensionUnpacked(result) => self.on_extension_unpacked(result),
             Background::Favicon(host, bytes) => self.on_favicon_downloaded(host, bytes),
             Background::Suggestions(generation, list) => self.on_suggestions(generation, list),
-            Background::Adblock(engines, fresh) => self.on_adblock_engine(engines, fresh),
+            Background::Adblock(engines, fresh, done) => self.on_adblock_engine(engines, fresh, done),
             Background::Hello(request, outcome) => self.on_hello(request, outcome),
             Background::Update(outcome) => self.on_update(outcome),
         }
@@ -168,12 +169,21 @@ impl App {
         if target == self.state.current_profile {
             return;
         }
+        self.snapshot_cookies();
+        let _ = self.history.save_profile(&self.state.current_profile);
+        self.close_suggest();
+        self.hello_pending.clear();
+        self.hello_request += 1;
+        self.pending_login = None;
+        self.cookies_restored = false;
         self.close_popup();
+        self.cleanup_auth_popups(true);
         let (tabs, _) = self.session_tabs();
         let current = self.state.current_profile.clone();
         self.state.sessions.insert(current, tabs);
-        for t in &mut self.tabs {
-            t.close_view();
+        let mut previous = std::mem::take(&mut self.tabs);
+        for t in &mut previous {
+            if !self.keep_for_download(t) { t.close_view(); }
         }
         self.close_account_view();
         self.tabs.clear();
@@ -183,9 +193,11 @@ impl App {
         self.state.current_profile = target.clone();
         // Her profilin şifreleri ayrıdır.
         self.vault = crate::passwords::Vault::load(&target);
+        self.history = History::load_profile(&target);
         self.hello_until = None;
         for t in self.state.sessions.remove(&target).unwrap_or_default() {
             self.push_tab(t.url, t.title);
+            if let Some(tab) = self.tabs.last_mut() { tab.pinned = t.pinned; }
         }
         if self.tabs.is_empty() {
             self.push_tab(String::new(), String::new());
@@ -197,7 +209,7 @@ impl App {
         self.active = usize::MAX;
         self.activate(0);
         self.load_avatar();
-        self.refresh_account(true);
+        self.refresh_account(false);
         self.dirty = true;
         self.save();
     }

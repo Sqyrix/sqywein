@@ -1,0 +1,26 @@
+name: Windows checks
+on: [push, pull_request]
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust checks
+        shell: pwsh
+        run: |
+          cargo clippy --locked --all-targets -- -D warnings
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cargo test --locked
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cargo build --locked --release
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Browser regressions
+        shell: pwsh
+        run: |
+          npm install --prefix "$env:RUNNER_TEMP/sqywein-qa" playwright --no-audit --no-fund
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $env:PLAYWRIGHT_MODULE = "$env:RUNNER_TEMP/sqywein-qa/node_modules/playwright"
+          node ui/test-ui.cjs
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          node ui/test-security.cjs
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }

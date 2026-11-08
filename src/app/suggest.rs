@@ -9,6 +9,7 @@ use crate::{
 };
 
 pub(super) const SUGGEST_CLASS: PCWSTR = w!("SqyweinSuggest");
+pub(super) const TIMER_SUGGEST: usize = 5;
 const ROW_H: f32 = 36.0;
 const MAX_ROWS: usize = 8;
 
@@ -61,7 +62,7 @@ struct Row {
 }
 
 pub(super) struct Suggest {
-    hwnd: HWND,
+    pub(super) hwnd: HWND,
     gfx: Gfx,
     /// Önerinin bağlı olduğu metin kutusu (adres çubuğu ya da ana sayfa).
     edit: HWND,
@@ -86,16 +87,24 @@ impl App {
         let rows = self.local_rows(&text);
         self.show_suggest(edit, &text, rows);
 
-        // Arama motorunun önerileri arka planda gelir; eskimiş yanıtlar atılır.
+        unsafe { let _ = KillTimer(Some(self.hwnd), TIMER_SUGGEST); }
         if self.state.settings.search_suggestions && !self.tabs[self.active].private && !text.contains("://") {
-            let (generation, query) = (self.suggest_gen, text.clone());
-            let endpoint = self.state.settings.suggest_url().to_string();
-            std::thread::spawn(move || {
-                net::init_thread();
-                let list = net::fetch(&format!("{endpoint}{}", url::encode(&query)), 64 * 1024).map(|b| net::parse_suggestions(&b)).unwrap_or_default();
-                engine::push_background(engine::Background::Suggestions(generation, list));
-            });
+            unsafe { SetTimer(Some(self.hwnd), TIMER_SUGGEST, 300, None); }
         }
+    }
+
+    pub(super) fn fetch_suggestions(&mut self) {
+        unsafe { let _ = KillTimer(Some(self.hwnd), TIMER_SUGGEST); }
+        let Some(sg) = &self.suggest else { return };
+        if self.suggest_busy || !self.state.settings.search_suggestions || self.tabs[self.active].private { return; }
+        let (generation, query) = (self.suggest_gen, sg.query.clone());
+        let endpoint = self.state.settings.suggest_url();
+        self.suggest_busy = true;
+        std::thread::spawn(move || {
+            net::init_thread();
+            let list = net::fetch(&format!("{endpoint}{}", url::encode(&query)), 64 * 1024).map(|b| net::parse_suggestions(&b)).unwrap_or_default();
+            engine::push_background(engine::Background::Suggestions(generation, list));
+        });
     }
 
     fn local_rows(&self, text: &str) -> Vec<Row> {
@@ -140,7 +149,9 @@ impl App {
     }
 
     pub(super) fn on_suggestions(&mut self, generation: u64, list: Vec<String>) {
+        self.suggest_busy = false;
         if generation != self.suggest_gen {
+            if self.suggest.is_some() { unsafe { SetTimer(Some(self.hwnd), TIMER_SUGGEST, 300, None); } }
             return;
         }
         let search = self.state.settings.search_url();
@@ -200,13 +211,16 @@ impl App {
                     return;
                 };
                 unsafe {
-                    let dark: i32 = 1;
+                    let dark: i32 = i32::from(is_dark());
                     let _ = DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark as *const _ as _, 4);
                     let corner = DWMWCP_ROUND;
                     let _ = DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &corner as *const _ as _, 4);
                 }
                 let Ok(mut gfx) = Gfx::new() else { return };
                 gfx.set_dpi(self.dpi);
+                if crate::theme::glass() && super::apply_backdrop(hwnd, true) {
+                    gfx.set_glass(true);
+                }
                 self.suggest = Some(Suggest { hwnd, gfx, edit, query: query.to_string(), rows, selected: None, width: anchor.w });
                 defer(move || unsafe { let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE); });
             }
@@ -220,6 +234,7 @@ impl App {
             defer(move || unsafe { let _ = DestroyWindow(hwnd); });
         }
         self.suggest_gen += 1;
+        unsafe { let _ = KillTimer(Some(self.hwnd), TIMER_SUGGEST); }
     }
 
     /// Öneri listesi açıkken ok, Enter ve Esc tuşları. Tüketildiyse `true`.
@@ -348,39 +363,45 @@ impl App {
             return;
         }
         let g = &sg.gfx;
-        g.clear(RAISED);
-        g.round_outline(Rect::new(0.0, 0.0, sg.width, h), 8.0, LINE, 1.0);
+        if crate::theme::glass() {
+            g.clear_transparent();
+            let (c, a) = crate::theme::menu_tint();
+            g.fill_alpha(Rect::new(0.0, 0.0, sg.width, h), c, a);
+        } else {
+            g.clear(raised());
+        }
+        g.round_outline_alpha(Rect::new(0.0, 0.0, sg.width, h), 8.0, line(), 1.0, 0.8);
         for (i, row) in sg.rows.iter().enumerate() {
             let r = Rect::new(6.0, 6.0 + i as f32 * ROW_H, sg.width - 12.0, ROW_H);
             if sg.selected == Some(i) {
-                g.round(r, 8.0, HOVER);
+                g.round(r, 8.0, hover());
             }
             let icon = Rect::new(r.x + 10.0, r.cy() - 8.0, 16.0, 16.0);
             match (&icons.get(i).cloned().flatten(), row.kind) {
                 (Some(img), _) => g.image(img, icon, false),
-                (None, Kind::Search) => g.text(ICON_SEARCH, icon, Font::MidIcon, MUTED, Align::Center),
+                (None, Kind::Search) => g.text(ICON_SEARCH, icon, Font::MidIcon, muted(), Align::Center),
                 (None, Kind::Bookmark) => g.text(ICON_STAR_FILLED, icon, Font::MidIcon, accent(), Align::Center),
                 (None, Kind::Command(k)) => g.text(COMMANDS[k].0, icon, Font::MidIcon, accent(), Align::Center),
-                (None, _) => g.text(ICON_GLOBE, icon, Font::MidIcon, MUTED, Align::Center),
+                (None, _) => g.text(ICON_GLOBE, icon, Font::MidIcon, muted(), Align::Center),
             }
             let x = icon.right() + 12.0;
             let avail = r.right() - x - 10.0;
             match row.kind {
                 Kind::Search | Kind::Url => {
-                    g.text(&row.text, Rect::new(x, r.y, avail, r.h), Font::Ui, INK, Align::Left);
+                    g.text(&row.text, Rect::new(x, r.y, avail, r.h), Font::Ui, ink(), Align::Left);
                 }
                 Kind::Tab(_) | Kind::Command(_) => {
                     let tw = g.measure(&row.text, Font::Ui).min(avail * 0.7);
-                    g.text(&row.text, Rect::new(x, r.y, tw + 2.0, r.h), Font::Ui, INK, Align::Left);
+                    g.text(&row.text, Rect::new(x, r.y, tw + 2.0, r.h), Font::Ui, ink(), Align::Left);
                     let hint = if matches!(row.kind, Kind::Tab(_)) { "— Sekmeye geç" } else { "— Komut" };
                     g.text(hint, Rect::new(x + tw + 8.0, r.y, (avail - tw - 8.0).max(0.0), r.h), Font::Small, accent(), Align::Left);
                 }
                 Kind::History | Kind::Bookmark => {
                     let title = if row.text.is_empty() { url::display(&row.url) } else { row.text.clone() };
                     let tw = g.measure(&title, Font::Ui).min(avail * 0.6);
-                    g.text(&title, Rect::new(x, r.y, tw + 2.0, r.h), Font::Ui, INK, Align::Left);
+                    g.text(&title, Rect::new(x, r.y, tw + 2.0, r.h), Font::Ui, ink(), Align::Left);
                     let host = format!("— {}", url::host(&row.url));
-                    g.text(&host, Rect::new(x + tw + 8.0, r.y, (avail - tw - 8.0).max(0.0), r.h), Font::Small, FAINT, Align::Left);
+                    g.text(&host, Rect::new(x + tw + 8.0, r.y, (avail - tw - 8.0).max(0.0), r.h), Font::Small, faint(), Align::Left);
                 }
             }
         }
