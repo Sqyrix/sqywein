@@ -133,3 +133,5 @@ Başlıkta Windows'un kendi caption bölümü kaldırıldı; özel küçült/bü
 Son otomatik doldurma değişikliğindeki deepActive sonsuz çağrısı düzeltildi; Shadow DOM odak regresyonu eklendi. Önceki logo/kurulum değişiklikleri korunurken eski simge temizliği sadece sürüm numaralı uygulama simgeleriyle sınırlandı. Taşınabilir exe, kurulu sürümün kayıtlarını kendiliğinden değiştirmez.
 
 Bearbyte için ui/.qa ve .bearbyte yok sayma kuralları eklendi. Yayın doğrulandıktan sonra yalnızca yerel target, ui/.qa ve dist çıktıları temizlenir; kaynaklar, varlıklar, Cargo.lock, Git/Bearbyte proje metaverisi korunur.
+
+0.4.3: Windows örtük caption eklediği için ana pencere WS_POPUP + yeniden boyutlandırma/min/max stilleriyle oluşturulur; tam ekrandan dönüşte de aynı stiller korunur. Gerçek pencere stilini okuyan iki kontrol dahil 31 native entegrasyon kontrolü başarılı oldu. 0.4.2 yayın adayı bu kontrol tamamlanmadan yayımlanmadı.

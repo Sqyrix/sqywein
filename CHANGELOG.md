@@ -2,6 +2,10 @@
 
 Sqywein'in sürümden sürüme yenilikleri. En yenisi en üstte.
 
+## 0.4.3
+
+- Windows’un başlık bölgesini yeniden eklemesi başlangıçta ve tam ekrandan dönüşte engellendi. Yeniden boyutlandırma, küçültme ve büyütme korunur.
+
 ## 0.4.2
 
 - YouTube uyarısının gizlenip tıklamayı engelleyen karartma katmanını açık bırakması düzeltildi. Reklam sonrası ses durumu geri yüklenir; site engellemesi kapatılınca YouTube modülü de durur.

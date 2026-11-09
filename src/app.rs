@@ -622,7 +622,7 @@ pub fn run() -> Result<()> {
             w!("Sqywein"),
             // WS_CAPTION ve WS_SYSMENU yok: cam açıkken Windows kendi başlık düğmelerini
             // çizmez; onları araç çubuğuyla aynı hizada biz çizeriz.
-            (WS_OVERLAPPEDWINDOW & !(WS_CAPTION | WS_SYSMENU)) | WS_CLIPCHILDREN,
+            (WS_POPUP | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX) | WS_CLIPCHILDREN,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
             (1280.0 * scale) as i32,
@@ -3079,7 +3079,7 @@ impl App {
             });
         } else if let Some(fs) = self.full_screen.take() {
             defer(move || unsafe {
-                SetWindowLongPtrW(hwnd, GWL_STYLE, (WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_CLIPCHILDREN).0 as isize);
+                SetWindowLongPtrW(hwnd, GWL_STYLE, (WS_POPUP | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_VISIBLE | WS_CLIPCHILDREN).0 as isize);
                 let _ = SetWindowPlacement(hwnd, &fs.placement);
                 let _ = SetWindowPos(hwnd, None, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER);
             });
