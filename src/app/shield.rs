@@ -178,6 +178,7 @@ impl App {
             if let Some(old) = t.ad_scripts[SLOT_YOUTUBE as usize].take() {
                 engine::remove_document_script(&view, &old);
             }
+            engine::execute(&view, if on { &script } else { "window.__sqYt?.setEnabled?.(false);" });
             if on {
                 engine::add_document_script(&view, t.id, SLOT_YOUTUBE, t.view_epoch, &script);
             }

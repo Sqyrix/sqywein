@@ -1,6 +1,6 @@
 // Integration smoke test against the actual Rust + WebView2 application.
 // Uses an isolated profile and a loopback-only debugging port for this process.
-const fs=require('node:fs'),path=require('node:path'),net=require('node:net'),http=require('node:http'),assert=require('node:assert/strict'),{spawn}=require('node:child_process');
+const fs=require('node:fs'),path=require('node:path'),net=require('node:net'),http=require('node:http'),assert=require('node:assert/strict'),{spawn,execFileSync}=require('node:child_process');
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const root=path.join(__dirname,'..');
 const exe=process.env.SQYWEIN_TEST_EXE || path.join(root,'target/release/sqywein.exe');
@@ -27,6 +27,10 @@ function check(value,label){assert.ok(value,label);checks++;}
   browser=await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
   const context=browser.contexts()[0];let page;
   for(let i=0;i<100;i++){page=context.pages().find(p=>p.url().startsWith('https://sqywein.ui/settings.html'));if(page)break;await delay(100);}
+  const frameScript = `Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public class SqyFrame{delegate bool E(IntPtr h,IntPtr l);[DllImport("user32.dll")]static extern bool EnumWindows(E e,IntPtr p);[DllImport("user32.dll")]static extern uint GetWindowThreadProcessId(IntPtr h,out uint p);[DllImport("user32.dll")]static extern int GetWindowLongW(IntPtr h,int n);public static int Read(uint pid){int found=-1;E e=(h,l)=>{uint p;GetWindowThreadProcessId(h,out p);int s=GetWindowLongW(h,-16);if(p==pid&&(s&0x40000)!=0){found=s;return false;}return true;};EnumWindows(e,IntPtr.Zero);return found;}}';[SqyFrame]::Read(${child.pid})`;
+  const frameStyle=Number(execFileSync('powershell.exe',['-NoProfile','-EncodedCommand',Buffer.from(frameScript,'utf16le').toString('base64')],{windowsHide:true,encoding:'utf8'}).trim());
+  check(frameStyle!==-1&&(frameStyle&0x00C00000)===0&&(frameStyle&0x00080000)===0,'native window has no second Windows caption');
+  check((frameStyle&0x00070000)===0x00070000,'custom frame retains resize/minimize/maximize capabilities');
   check(page,'native settings page loads');await page.locator('#settings:not([hidden])').waitFor();
   check(!context.pages().some(p=>p.url().includes('google.com/search')),'restart flag does not become search tab');
   const rpc=(type,payload={})=>page.evaluate(({type,payload})=>new Promise((resolve,reject)=>{const timeout=setTimeout(()=>reject(Error(type+' timed out')),5000);const off=on(type,message=>{clearTimeout(timeout);off();resolve(message);});send(type,payload);}),{type,payload});

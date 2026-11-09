@@ -48,6 +48,8 @@ fn main() {
     app::wait_for_previous();
     let _instance = match integration::acquire_or_forward() { Ok(Some(i)) => i, Ok(None) => return, Err(e) => { unsafe { windows::Win32::UI::WindowsAndMessaging::MessageBoxW(None, &windows::core::HSTRING::from(format!("Açık Sqywein penceresine ulaşılamadı: {e}")), windows::core::w!("Sqywein"), windows::Win32::UI::WindowsAndMessaging::MB_ICONERROR); } return } };
     update::cleanup();
+    // Güncellemeden sonraki ilk açılışta simge ve kısayollar yeni sürüme geçer.
+    setup::refresh_after_update();
     if let Err(e) = app::run() {
         let text = windows::core::HSTRING::from(format!("Sqywein başlatılamadı:\n{e}"));
         unsafe {

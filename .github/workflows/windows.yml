@@ -24,3 +24,5 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           node ui/test-security.cjs
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          node ui/test-youtube.cjs
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }

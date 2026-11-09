@@ -69,7 +69,7 @@ pub fn youtube_script(default_on: bool, off: &[String], on: &[String]) -> String
     let (off, on) = (list(off), list(on));
     format!(
         "(()=>{{const h=location.hostname.replace(/^(www|m)\\./,'');\
-         if(!({on}.includes(h)||({default_on}&&!{off}.includes(h))))return;{YOUTUBE_SCRIPT}}})();"
+         const enabled=({on}.includes(h)||({default_on}&&!{off}.includes(h)));window.__sqYt?.setEnabled?.(enabled);if(!enabled)return;{YOUTUBE_SCRIPT}}})();"
     )
 }
 
@@ -332,48 +332,69 @@ pub const COLLECTOR_SCRIPT: &str = r#"(() => {
 /// YouTube modülü: oynatıcı yanıtlarındaki reklam alanlarını budar, yine de
 /// reklam gelirse sessize alıp atlar ve reklam kutularını gizler.
 pub const YOUTUBE_SCRIPT: &str = r#"(() => {
-  if (!/(^|\.)youtube\.com$/.test(location.hostname) || window.__sqYt) return;
-  window.__sqYt = true;
+  if (!/(^|\.)youtube\.com$/.test(location.hostname)) return;
+  if (window.__sqYt?.setEnabled) { window.__sqYt.setEnabled(true); return; }
+  let enabled = true, timer = 0, savedMute = null;
   const KEYS = ['adPlacements', 'playerAds', 'adSlots', 'adBreakHeartbeatParams', 'adBreakParams'];
   const strip = o => {
-    if (!o || typeof o !== 'object') return o;
+    if (!enabled || !o || typeof o !== 'object') return o;
     for (const k of KEYS) if (k in o) delete o[k];
     if (o.playerResponse) strip(o.playerResponse);
     return o;
   };
   const parse = JSON.parse;
   JSON.parse = function () { return strip(parse.apply(this, arguments)); };
-  let initial;
-  try {
-    Object.defineProperty(window, 'ytInitialPlayerResponse', { configurable: true, get: () => initial, set: v => { initial = strip(v); } });
-  } catch (e) {}
-  const origFetch = window.fetch;
-  window.fetch = async function (input) {
-    const res = await origFetch.apply(this, arguments);
-    try {
-      const url = typeof input === 'string' ? input : input && input.url;
-      if (url && /\/youtubei\/v1\/(player|next|reel)/.test(url)) {
-        const data = strip(await res.clone().json());
-        return new Response(JSON.stringify(data), { status: res.status, statusText: res.statusText, headers: res.headers });
-      }
-    } catch (e) {}
-    return res;
+  let initial = window.ytInitialPlayerResponse;
+  try { Object.defineProperty(window, 'ytInitialPlayerResponse', {configurable:true,get:()=>initial,set:v=>{initial=strip(v);}}); strip(initial); } catch {}
+  // Preserve Response.url, headers, cloning and streaming instead of constructing
+  // a different Response around a rewritten body.
+  const responseJson = Response.prototype.json;
+  Response.prototype.json = async function () {
+    const value = await responseJson.apply(this, arguments);
+    return /\/youtubei\/v1\/(player|next|reel)/.test(this.url) ? strip(value) : value;
   };
+  const response = Object.getOwnPropertyDescriptor(XMLHttpRequest.prototype,'response');
+  if (response?.get && response.configurable) {
+    try { Object.defineProperty(XMLHttpRequest.prototype,'response',{...response,get(){const value=response.get.call(this);return /\/youtubei\/v1\/(player|next|reel)/.test(this.responseURL)?strip(value):value;}}); } catch {}
+  }
   const css = '#masthead-ad,ytd-ad-slot-renderer,ytd-in-feed-ad-layout-renderer,ytd-banner-promo-renderer,'
     + 'ytd-promoted-sparkles-web-renderer,ytd-display-ad-renderer,ytd-companion-slot-renderer,#player-ads,'
     + 'ytd-statement-banner-renderer,.ytp-ad-overlay-container,ytd-rich-item-renderer:has(ytd-ad-slot-renderer),'
-    + 'ytd-reel-video-renderer:has(.ytd-ad-slot-renderer),tp-yt-paper-dialog:has(ytd-enforcement-message-view-model)'
-    + '{display:none!important}';
-  const addStyle = () => { const s = document.createElement('style'); s.textContent = css; (document.head || document.documentElement).appendChild(s); };
-  if (document.documentElement) addStyle(); else document.addEventListener('readystatechange', addStyle, { once: true });
-  setInterval(() => {
-    const p = document.querySelector('.html5-video-player');
-    if (p && p.classList.contains('ad-showing')) {
-      const v = p.querySelector('video');
-      if (v) { v.muted = true; if (isFinite(v.duration) && v.duration > 0) v.currentTime = v.duration; }
-      for (const b of document.querySelectorAll('.ytp-skip-ad-button,.ytp-ad-skip-button,.ytp-ad-skip-button-modern')) b.click();
+    + 'ytd-reel-video-renderer:has(.ytd-ad-slot-renderer){display:none!important}';
+  let style;
+  const restoreMute = () => { if(savedMute){if(savedMute.video.muted)savedMute.video.muted=savedMute.muted;savedMute=null;} };
+  const tick = () => {
+    timer=0; if(!enabled)return;
+    if(!style?.isConnected && document.documentElement){style=document.createElement('style');style.id='__sqYtStyle';style.textContent=css;(document.head||document.documentElement).append(style);}
+    // Never conceal a modal with CSS: its backdrop, focus trap and scroll lock
+    // would survive. Let YouTube close its own overlay; retain visible fallback.
+    for(const dialog of document.querySelectorAll('tp-yt-paper-dialog:has(ytd-enforcement-message-view-model)')){
+      if(dialog.opened || dialog.hasAttribute('opened') || getComputedStyle(dialog).display!=='none'){
+        try{if(typeof dialog.close==='function')dialog.close();}catch{}
+        if(getComputedStyle(dialog).display==='none' && (dialog.opened || dialog.hasAttribute('opened')))dialog.style.setProperty('display','block','important');
+      }
     }
-  }, 300);
+    const player=document.querySelector('.html5-video-player');
+    if(player?.classList.contains('ad-showing')){
+      const video=player.querySelector('video');
+      if(video){
+        if(savedMute?.video!==video){restoreMute();savedMute={video,muted:video.muted};}
+        video.muted=true;
+        try{if(Number.isFinite(video.duration)&&video.duration>0&&video.duration<600)video.currentTime=video.duration;}catch{}
+      }
+      for(const button of player.querySelectorAll('.ytp-skip-ad-button,.ytp-ad-skip-button,.ytp-ad-skip-button-modern,.ytp-skip-ad-button-v2'))button.click();
+    }else restoreMute();
+    timer=setTimeout(tick,document.hidden?1500:500);
+  };
+  const observer=new MutationObserver(()=>{if(enabled&&!timer)timer=setTimeout(tick,100);});
+  const setEnabled = on => {
+    enabled=!!on;clearTimeout(timer);timer=0;observer.disconnect();
+    if(!enabled){style?.remove();restoreMute();return;}
+    observer.observe(document,{childList:true,subtree:true});tick();
+  };
+  window.__sqYt={setEnabled};
+  document.addEventListener('yt-navigate-finish',()=>{if(enabled){clearTimeout(timer);timer=setTimeout(tick,0);}});
+  setEnabled(true);
 })();"#;
 
 // ---------- Yükleme ve güncelleme ----------

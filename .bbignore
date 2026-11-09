@@ -25,3 +25,9 @@ target
 
 # Kurulum dosyalari
 dist
+
+# Yerel QA tarayıcı profilleri ve Bearbyte indeksi kaynak kod değildir
+ui/.qa
+ui/.qa/**
+.bearbyte
+.bearbyte/**

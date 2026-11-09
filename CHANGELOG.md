@@ -2,6 +2,21 @@
 
 Sqywein'in sürümden sürüme yenilikleri. En yenisi en üstte.
 
+## 0.4.2
+
+- YouTube uyarısının gizlenip tıklamayı engelleyen karartma katmanını açık bırakması düzeltildi. Reklam sonrası ses durumu geri yüklenir; site engellemesi kapatılınca YouTube modülü de durur.
+- Cam başlık çubuğundaki çift küçült/büyüt/kapat simgeleri düzeltildi.
+- Yerel test profilleri Bearbyte taramasından çıkarıldı; derleme/test çıktıları kaynak deposuna dahil edilmez.
+
+- Otomatik doldurmada odak tespitinin kendini tekrar çağırıp alanları kilitlemesi düzeltildi.
+
+## 0.4.1
+
+- Yeni logo her yerde: güncellemeden sonraki ilk açılışta simge dosyası, Başlat menüsü, masaüstü ve görev çubuğu kısayolları ile "Yüklü uygulamalar" kendiliğinden yenilenir (Windows'un eski simgeyi göstermesi engellendi).
+- Simge küçük boyutlarda daha net (logonun boş kenarları kırpıldı).
+- Adres alanında ve başlangıç sayfasında yazarken titreme giderildi.
+- Menüler ve öneriler ClearType ile çizilir; yazılar daha net.
+
 ## 0.4.0
 
 ### Çeviri
@@ -36,7 +51,6 @@ Sqywein'in sürümden sürüme yenilikleri. En yenisi en üstte.
 ### Görünüm
 - Pencere düğmeleri (küçült/büyüt/kapat) araç çubuğuyla aynı hizada; tam ekranda da çalışır.
 - Daha akıcı animasyonlar; mavi, akıcı yükleme çizgisi; sürüklenebilir reklam engelleyici kaydırıcısı.
-- Daha net yazılar: menüler ve öneriler ClearType ile çizilir; camda Windows'un kendi yazı ayarları kullanılır.
 - Simetrik düğmeler, yumuşak kenarlı cam efektleri.
 
 ## 0.3.0

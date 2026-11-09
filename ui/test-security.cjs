@@ -99,6 +99,12 @@ const server=http.createServer((req,res)=>{res.setHeader('Content-Type','text/ht
   await pw.evaluate(()=>{window.__leaks=[];window.addEventListener('sq-password',e=>window.__leaks.push(e.data));});
   await pw.evaluate(delivery(request.documentToken,oldSource,{type:'pw.secret',documentToken:request.documentToken,id:1,username:'alice',password:'secret'}));
   check((await pw.evaluate(()=>window.__leaks.length))===0,'same-URL replacement document receives no secret event');
+  const shadow = await context.newPage();await shadow.addInitScript(autofill);await shadow.goto(base);
+  await shadow.evaluate(()=>{const host=document.createElement('div');document.body.append(host);const root=host.attachShadow({mode:'open'});root.innerHTML='<form><input id="shadow-user" autocomplete="username"><input id="shadow-pw" type="password"></form>';root.querySelector('#shadow-pw').focus();});
+  await shadow.waitForTimeout(300);
+  await shadow.evaluate(()=>window.__bridgeListeners.forEach(cb=>cb({data:{type:'pw.accounts',accounts:[{id:9,username:'shadow-account'}]}})));
+  await shadow.locator('#shadow-pw').press('Enter');
+  check(await shadow.evaluate(()=>window.__messages.some(m=>m.type==='pw.fill'&&m.id===9)),'shadow DOM focus resolves without recursive overflow');
   await context.close();console.log(`PASS: ${checks} security and rest-guard assertions (simulated media/capture and WebView2 bridge)`);
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;}).finally(()=>server.close());

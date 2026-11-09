@@ -112,7 +112,7 @@ const TYPES: &[(&str, &str)] = &[(".htm","SqyweinHTML"),(".html","SqyweinHTML"),
     (".jpg","SqyweinImage"),(".jpeg","SqyweinImage"),(".gif","SqyweinImage")];
 fn registration(exe: &Path) -> Vec<(String, String, String)> {
     let command = format!("\"{}\" -- \"%1\"", exe.display());
-    let icon = format!("{},0", exe.display());
+    let icon = format!("{},0", icon_file(exe).display());
     let mut entries = Vec::new();
     let mut add = |key: String, name: &str, value: String| entries.push((key,name.into(),value));
     for (id,label) in [("SqyweinHTML","Sqywein HTML belgesi"),("SqyweinPDF","Sqywein PDF belgesi"),("SqyweinImage","Sqywein görseli")] {
@@ -203,7 +203,8 @@ pub fn create_shortcut(exe: &Path, folder: &GUID) -> Result<()> {
         let link:IShellLinkW=CoCreateInstance(&ShellLink,None,CLSCTX_INPROC_SERVER)?;
         link.SetPath(&HSTRING::from(exe.to_string_lossy().as_ref()))?;
         link.SetDescription(w!("Sqywein web browser"))?;
-        link.SetIconLocation(&HSTRING::from(exe.to_string_lossy().as_ref()),0)?;
+        let icon = icon_file(exe);
+        link.SetIconLocation(&HSTRING::from(icon.to_string_lossy().as_ref()),0)?;
         let store:IPropertyStore=link.cast()?;
         let key=PROPERTYKEY{fmtid:APP_KEY,pid:5};
         store.SetValue(&key,&PROPVARIANT::from(APP_ID))?;store.Commit()?;
@@ -212,6 +213,57 @@ pub fn create_shortcut(exe: &Path, folder: &GUID) -> Result<()> {
     }
     Ok(())
 }
+/// Kısayolların simgesi: exe'nin yanındaki sürüm numaralı .ico dosyası (varsa).
+/// Yol her sürümde değiştiği için Windows eski simgeyi önbellekten gösteremez.
+pub fn icon_file(exe: &Path) -> std::path::PathBuf {
+    let ico = exe.with_file_name(format!("sqywein-{}.ico", crate::update::CURRENT));
+    if ico.is_file() { ico } else { exe.to_path_buf() }
+}
+
+/// Sqywein'i gösteren bütün kısayolların (görev çubuğuna sabitlenmiş, Başlat menüsü,
+/// masaüstü) simgesini güncel simge dosyasına bağlar.
+pub fn refresh_shortcut_icons(exe: &Path) {
+    use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoUninitialize, IPersistFile, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, STGM_READWRITE};
+    let mut dirs: Vec<std::path::PathBuf> = Vec::new();
+    if let Some(appdata) = std::env::var_os("APPDATA") {
+        dirs.push(std::path::PathBuf::from(appdata).join(r"Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"));
+    }
+    for folder in [&FOLDERID_Programs, &FOLDERID_Desktop] {
+        if let Some(dir) = shortcut_path(folder).and_then(|p| p.parent().map(Path::to_path_buf)) { dirs.push(dir); }
+    }
+    let target = exe.to_string_lossy().to_lowercase();
+    let icon = icon_file(exe);
+    unsafe {
+        if CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_err() { return; }
+        for dir in dirs {
+            let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+            for e in entries.flatten() {
+                let path = e.path();
+                if path.extension().is_none_or(|x| x != "lnk") { continue; }
+                let Ok(link) = CoCreateInstance::<_, IShellLinkW>(&ShellLink, None, CLSCTX_INPROC_SERVER) else { continue };
+                let Ok(file) = link.cast::<IPersistFile>() else { continue };
+                if file.Load(&HSTRING::from(path.to_string_lossy().as_ref()), STGM_READWRITE).is_err() { continue; }
+                let mut buf = [0u16; 1024];
+                if link.GetPath(&mut buf, std::ptr::null_mut(), 0).is_err() { continue; }
+                let len = buf.iter().position(|c| *c == 0).unwrap_or(buf.len());
+                if String::from_utf16_lossy(&buf[..len]).to_lowercase() != target { continue; }
+                let _ = link.SetIconLocation(&HSTRING::from(icon.to_string_lossy().as_ref()), 0);
+                let _ = file.Save(&HSTRING::from(path.to_string_lossy().as_ref()), true);
+            }
+        }
+        CoUninitialize();
+        SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, None, None);
+    }
+}
+
+/// Sqywein Windows'a tarayıcı olarak kaydedilmiş mi?
+pub fn is_registered() -> bool {
+    unsafe {
+        let mut size = 0u32;
+        RegGetValueW(HKEY_CURRENT_USER, w!(r"Software\RegisteredApplications"), w!("Sqywein"), RRF_RT_REG_SZ, None, None, Some(&mut size)).is_ok()
+    }
+}
+
 pub fn is_default_browser() -> bool {
     ["http","https"].iter().all(|protocol| unsafe {
         let mut value = [0u16;256]; let mut len = value.len() as u32;

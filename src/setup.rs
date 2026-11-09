@@ -10,6 +10,7 @@ use windows::{
     Win32::{System::Registry::*, UI::{Shell::*, WindowsAndMessaging::*}},
 };
 
+static APP_ICON: &[u8] = include_bytes!("../Assets/app.ico");
 const UNINSTALL: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Sqywein";
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
@@ -101,9 +102,11 @@ fn install(silent: bool) -> std::result::Result<(), String> {
         }
         let _ = std::fs::remove_file(&old);
     }
+    write_icon(&target);
     integration::register_browser_at(&target).map_err(|e| e.to_string())?;
     integration::create_shortcut(&target, &FOLDERID_Desktop).map_err(|e| e.to_string())?;
     write_uninstall_entry(&target).map_err(|e| e.to_string())?;
+    integration::refresh_shortcut_icons(&target);
     if !silent {
         let _ = Command::new(&target).spawn();
     }
@@ -115,6 +118,45 @@ fn same_file(a: &Path, b: &Path) -> bool {
         (Ok(a), Ok(b)) => a == b,
         _ => false,
     }
+}
+
+/// Simge, exe'nin yanına sürüm numaralı ayrı bir dosyaya yazılır; eski sürümlerinkiler silinir.
+/// Yol her sürümde değiştiği için Windows kısayollarda eski simgeyi önbellekten gösteremez.
+fn is_versioned_icon(name: &str) -> bool {
+    let Some(version) = name.strip_prefix("sqywein-").and_then(|s| s.strip_suffix(".ico")) else { return false };
+    let parts: Vec<&str> = version.split('.').collect();
+    parts.len() == 3 && parts.iter().all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+}
+fn write_icon(exe: &Path) {
+    let Some(dir) = exe.parent() else { return };
+    let name = format!("sqywein-{CURRENT}.ico");
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for e in entries.flatten() {
+            let n = e.file_name().to_string_lossy().to_string();
+            if is_versioned_icon(&n) && n != name { let _ = std::fs::remove_file(e.path()); }
+        }
+    }
+    let _ = std::fs::write(dir.join(name), APP_ICON);
+}
+
+/// Otomatik güncellemeden sonra ilk açılış: simge dosyası, kısayollar, Windows kaydı ve
+/// "Yüklü uygulamalar"daki sürüm yeni sürüme göre yenilenir. Her sürümde bir kez çalışır.
+pub fn refresh_after_update() {
+    if integration::is_dev() { return; }
+    let Ok(exe) = std::env::current_exe() else { return };
+    if exe.with_file_name(format!("sqywein-{CURRENT}.ico")).is_file() { return; }
+    // A portable/development executable must not redirect installed browser associations.
+    if !same_file(&exe, &install_dir().join("sqywein.exe")) { return; }
+    std::thread::spawn(move || {
+        write_icon(&exe);
+        if integration::is_registered() { let _ = integration::register_browser_at(&exe); }
+        let installed = unsafe {
+            let mut size = 0u32;
+            RegGetValueW(HKEY_CURRENT_USER, &HSTRING::from(UNINSTALL), w!("DisplayName"), RRF_RT_REG_SZ, None, None, Some(&mut size)).is_ok()
+        };
+        if installed && same_file(&exe, &install_dir().join("sqywein.exe")) { let _ = write_uninstall_entry(&exe); }
+        integration::refresh_shortcut_icons(&exe);
+    });
 }
 
 fn write_dword(key: &str, name: &str, value: u32) -> Result<()> {
@@ -135,7 +177,7 @@ fn write_uninstall_entry(exe: &Path) -> Result<()> {
         ("DisplayName", "Sqywein".to_string()),
         ("DisplayVersion", CURRENT.to_string()),
         ("Publisher", "Sqyrix".to_string()),
-        ("DisplayIcon", format!("{},0", exe.display())),
+        ("DisplayIcon", format!("{},0", integration::icon_file(exe).display())),
         ("InstallLocation", install_dir().display().to_string()),
         ("UninstallString", format!("{quoted} --uninstall")),
         ("QuietUninstallString", format!("{quoted} --uninstall --silent")),
@@ -181,4 +223,13 @@ fn uninstall(silent: bool) -> std::result::Result<(), String> {
         message("Sqywein kaldırıldı.", MB_OK | MB_ICONINFORMATION);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod icon_tests {
+    #[test]
+    fn cleanup_only_owns_numeric_version_icons() {
+        assert!(super::is_versioned_icon("sqywein-0.4.0.ico"));
+        for name in ["sqywein-custom.ico", "sqywein-.ico", "sqywein-1..0.ico", "other-0.4.0.ico"] { assert!(!super::is_versioned_icon(name)); }
+    }
 }

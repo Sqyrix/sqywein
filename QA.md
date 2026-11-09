@@ -122,3 +122,14 @@ Native araç testi: `node ui/test-extras.cjs`. `SQYWEIN_TEST_EXE` ile exe yolu v
 Windows Computer Use istemcisi test penceresini yeniden bağlarken aynı uygulama kimliği için sahiplik hatası verdi; bu araçla native menünün son görsel denetimi tamamlanamadı. WebView panelleri CDP üzerinden görüntülendi ve sınandı; gerçek kullanıcı hesabında Google/Claude girişi denenmedi.
 
 Optimize release derlemesinde ayrıca 29 native uygulama ve 14 Windows/yönlendirme kontrolü başarılı oldu. Yeni panel testleri animasyonları kapatma tercihini de doğrular.
+
+
+## 9 Kasım 2026 — 0.4.2 düzeltmeleri
+
+YouTube enforcement penceresi CSS ile gizlenmez; çerçevenin kendi kapatma akışı kullanılarak karartma, odak ve kaydırma kilidi bırakılır. Yerel senaryolarda 18 YouTube kontrolü, 29 güvenlik/otomatik doldurma kontrolü, 201 iç sayfa kontrolü ve 58 Rust testi geçti. Clippy tüm hedeflerde başarılıdır. Gerçek kullanıcı hesabı veya oturum çerezleri kullanılmadı; canlı YouTube reklam sunumunun her varyantı için garanti verilmez.
+
+Başlıkta Windows'un kendi caption bölümü kaldırıldı; özel küçült/büyüt/kapat düğmeleri tek kez çizilir. Native test, gerçek pencerenin stilini okuyarak caption bulunmadığını ve yeniden boyutlandırma/min/max yeteneklerinin korunduğunu denetler.
+
+Son otomatik doldurma değişikliğindeki deepActive sonsuz çağrısı düzeltildi; Shadow DOM odak regresyonu eklendi. Önceki logo/kurulum değişiklikleri korunurken eski simge temizliği sadece sürüm numaralı uygulama simgeleriyle sınırlandı. Taşınabilir exe, kurulu sürümün kayıtlarını kendiliğinden değiştirmez.
+
+Bearbyte için ui/.qa ve .bearbyte yok sayma kuralları eklendi. Yayın doğrulandıktan sonra yalnızca yerel target, ui/.qa ve dist çıktıları temizlenir; kaynaklar, varlıklar, Cargo.lock, Git/Bearbyte proje metaverisi korunur.

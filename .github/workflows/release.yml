@@ -39,6 +39,17 @@ jobs:
       - name: Test
         run: cargo test --release
 
+      - name: YouTube ve giriş regresyonları
+        shell: pwsh
+        run: |
+          npm install --prefix "$env:RUNNER_TEMP/sqywein-qa" playwright --no-audit --no-fund
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $env:PLAYWRIGHT_MODULE = "$env:RUNNER_TEMP/sqywein-qa/node_modules/playwright"
+          node ui/test-youtube.cjs
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          node ui/test-security.cjs
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
       - name: Derle
         run: cargo build --release
 

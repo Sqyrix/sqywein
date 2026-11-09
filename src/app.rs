@@ -547,9 +547,45 @@ unsafe fn create_edit(parent: HWND, instance: HINSTANCE, id: i32, cue: &str) -> 
         None,
     )?;
     let _ = SetLayeredWindowAttributes(edit, COLORREF(0), 255, LWA_ALPHA);
+    // Çift arabellekli çizim: yazarken zemin silinip yeniden yazılırken oluşan titreme yok.
+    let _ = windows::Win32::UI::Shell::SetWindowSubclass(edit, Some(edit_subclass), 1, 0);
     let cue = wide(cue);
     SendMessageW(edit, EM_SETCUEBANNER, Some(WPARAM(1)), Some(LPARAM(cue.as_ptr() as isize)));
     Ok(edit)
+}
+
+/// Metin kutusunu önce bellekteki bir bitmap'e, sonra tek seferde ekrana çizer.
+unsafe extern "system" fn edit_subclass(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM, _id: usize, _data: usize) -> LRESULT {
+    use windows::Win32::UI::Shell::DefSubclassProc;
+    match msg {
+        WM_ERASEBKGND => LRESULT(1),
+        WM_PAINT => {
+            let mut ps = PAINTSTRUCT::default();
+            let hdc = BeginPaint(hwnd, &mut ps);
+            let mut rc = RECT::default();
+            let _ = GetClientRect(hwnd, &mut rc);
+            let (w, h) = (rc.right - rc.left, rc.bottom - rc.top);
+            if w > 0 && h > 0 {
+                let mem = CreateCompatibleDC(Some(hdc));
+                let bmp = CreateCompatibleBitmap(hdc, w, h);
+                let old = SelectObject(mem, bmp.into());
+                // Zemin rengi ve yazı rengi üst pencereden (WM_CTLCOLOREDIT) gelir.
+                let parent = GetParent(hwnd).unwrap_or_default();
+                let brush = HBRUSH(SendMessageW(parent, WM_CTLCOLOREDIT, Some(WPARAM(mem.0 as usize)), Some(LPARAM(hwnd.0 as isize))).0 as _);
+                FillRect(mem, &rc, brush);
+                let _ = HideCaret(Some(hwnd));
+                SendMessageW(hwnd, WM_PRINTCLIENT, Some(WPARAM(mem.0 as usize)), Some(LPARAM(PRF_CLIENT as isize)));
+                let _ = BitBlt(hdc, 0, 0, w, h, Some(mem), 0, 0, SRCCOPY);
+                let _ = ShowCaret(Some(hwnd));
+                SelectObject(mem, old);
+                let _ = DeleteObject(bmp.into());
+                let _ = DeleteDC(mem);
+            }
+            let _ = EndPaint(hwnd, &ps);
+            LRESULT(0)
+        }
+        _ => DefSubclassProc(hwnd, msg, wparam, lparam),
+    }
 }
 
 unsafe fn register_class(instance: HINSTANCE, name: PCWSTR, proc: WNDPROC, style: WNDCLASS_STYLES, icon: HICON) -> Result<()> {
@@ -584,9 +620,9 @@ pub fn run() -> Result<()> {
             WINDOW_EX_STYLE(0),
             class,
             w!("Sqywein"),
-            // WS_SYSMENU yok: cam açıkken Windows kendi küçült/büyüt/kapat düğmelerini
+            // WS_CAPTION ve WS_SYSMENU yok: cam açıkken Windows kendi başlık düğmelerini
             // çizmez; onları araç çubuğuyla aynı hizada biz çizeriz.
-            (WS_OVERLAPPEDWINDOW & !WS_SYSMENU) | WS_CLIPCHILDREN,
+            (WS_OVERLAPPEDWINDOW & !(WS_CAPTION | WS_SYSMENU)) | WS_CLIPCHILDREN,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
             (1280.0 * scale) as i32,
@@ -733,9 +769,12 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                 return LRESULT(if is_start { search.0 } else { address.0 } as isize);
             }
             WM_COMMAND => {
-                // Metin kutuları odak değiştirince çerçeveleri yenilensin.
-                let _ = InvalidateRect(Some(hwnd), None, false);
                 let code = ((wparam.0 >> 16) & 0xFFFF) as u32;
+                // Yalnızca odak değişince çerçeve yenilenir; her harfte bütün pencere
+                // yeniden çizilmez (yazarken titremeyi önler).
+                if code == EN_SETFOCUS || code == EN_KILLFOCUS {
+                    let _ = InvalidateRect(Some(hwnd), None, false);
+                }
                 let control = HWND(lparam.0 as _);
                 if code == 0 && with_app(|app| app.default_prompt_command(control)).unwrap_or(false) {
                     run_deferred(); return LRESULT(0);

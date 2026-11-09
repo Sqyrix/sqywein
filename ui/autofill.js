@@ -20,29 +20,83 @@
   const usernames = new WeakSet();
   const submitted = new Map();
   const visible = input => input instanceof HTMLInputElement && input.isConnected && !input.disabled && !input.readOnly && input.getClientRects().length > 0 && getComputedStyle(input).visibility === 'visible';
+  // Kullanıcı adı olabilecek alan türleri (Chrome gibi: sayı ve telefon da; e-Devlet T.C. alanı type="number").
+  const TEXTY = ['text','email','tel','number','url'];
+  const ID_HINT = /user|e-?mail|login|logon|account|apple.?id|kullan|posta|hesap|kimlik|\btc\b|tckn|trid|identity|national|telefon|phone|gsm|mobil|\buid\b|m[üu][şs]teri|customer|abone|[öo][ğg]renci|student|sicil|member|[üu]ye/i;
+  const NOT_ID = /search|\bara\b|arama|captcha|otp|one.?time|verification|do[ğg]rulama.?kod|\bcode\b|\bkod\b|coupon|kupon|promo|zip|postal|posta.?kodu|amount|tutar|card.?number|kart.?no|cvv|quantity/i;
+  // Alanın insan için yazılmış adı: etiket, aria adı, yer tutucu, title, name ve id.
+  function describeField(input) {
+    const parts = [input.name, input.id, input.placeholder, input.title, input.getAttribute('aria-label') || ''];
+    for (const label of input.labels || []) parts.push(label.textContent);
+    for (const id of (input.getAttribute('aria-labelledby') || '').split(/\s+/)) { if (id) parts.push(document.getElementById(id)?.textContent || ''); }
+    return parts.join(' ').replace(/\s+/g, ' ').slice(0, 400);
+  }
+  // Kimlik alanı puanı: site işareti (autocomplete) en güçlüsü, sonra tür ve ad.
+  function identityScore(input) {
+    const ac = input.autocomplete || '';
+    if (/(?:^|\s)(one-time-code|cc-|new-password|current-password)/i.test(ac)) return -10;
+    const text = describeField(input);
+    let score = 0;
+    if (/(?:^|\s)(username|email)(?:\s|$)/i.test(ac)) score += 4;
+    if (/(?:^|\s)tel(?:\s|$)/i.test(ac)) score += 2;
+    if (input.type === 'email') score += 2;
+    if (ID_HINT.test(text)) score += 2;
+    if (NOT_ID.test(text) || input.type === 'search') score -= 6;
+    return score;
+  }
+  // Açık Shadow DOM'ların içi de taranır (Apple gibi web bileşenli girişler).
+  function deepInputs(selector, root = document, out = []) {
+    out.push(...root.querySelectorAll(selector));
+    for (const el of root.querySelectorAll('*')) {
+      if (el.shadowRoot) deepInputs(selector, el.shadowRoot, out);
+    }
+    return out;
+  }
+  function deepActive() {
+    let el = document.activeElement;
+    while (el?.shadowRoot?.activeElement) el = el.shadowRoot.activeElement;
+    return el;
+  }
   function pair(password) {
-    const container = password.form || password.closest('section,article,[role="form"],dialog') || password.parentElement?.parentElement || document;
-    const candidates = [...container.querySelectorAll('input')].filter(input =>
-      visible(input) && ['text','email','tel'].includes(input.type) &&
-      (!password.form || input.form === password.form) && (input.compareDocumentPosition(password) & Node.DOCUMENT_POSITION_FOLLOWING));
-    return {password, username: candidates.filter(input => /(?:^|\s)(username|email)(?:\s|$)/i.test(input.autocomplete)).pop() || candidates.pop() || null};
+    const container = password.form || password.closest('section,article,[role="form"],dialog') || password.parentElement?.parentElement || password.getRootNode();
+    const before = input => (!password.form || input.form === password.form) && (input.compareDocumentPosition(password) & Node.DOCUMENT_POSITION_FOLLOWING);
+    // Adaylar: şifreden önceki metin benzeri alanlar; ayrıca adı kimlik olan "gizli" (şifre türünde) alanlar.
+    const candidates = [...container.querySelectorAll('input')].filter(input => visible(input) && before(input) &&
+      (TEXTY.includes(input.type) || (input.type === 'password' && ID_HINT.test(describeField(input)))) && identityScore(input) > -5);
+    if (!candidates.length) return {password, username: null};
+    // En yüksek puanlı; eşitlikte şifreye en yakın olan (Chrome'un "son metin alanı" kuralı).
+    let best = candidates[candidates.length - 1], bestScore = identityScore(best);
+    for (const input of candidates) { const sc = identityScore(input); if (sc > bestScore) { best = input; bestScore = sc; } }
+    return {password, username: best};
   }
   // İki adımlı girişte (önce e-posta, sonra şifre) seçilen hesap ve yazılan ad hatırlanır.
   const memory = {
     get() { try { return JSON.parse(sessionStorage.getItem('__sqPwUser') || 'null'); } catch { return null; } },
     set(v) { try { sessionStorage.setItem('__sqPwUser', JSON.stringify(v)); } catch {} },
   };
-  const USER_HINT = /user|email|e-mail|login|account|apple.?id|kullan|posta|hesap/i;
+  // Önce kullanıcı adı, sonra şifre istenen girişlerin ilk adımı (Apple, Google, Microsoft…).
   function loneUsernames() {
-    if ([...document.querySelectorAll('input[type="password"]')].some(visible)) return [];
-    return [...document.querySelectorAll('input')].filter(input => visible(input) && ['text','email','tel'].includes(input.type) &&
-      (/(?:^|\s)(username|email)(?:\s|$)/i.test(input.autocomplete) || input.type === 'email' || USER_HINT.test(input.name + ' ' + input.id + ' ' + (input.getAttribute('aria-label') || ''))));
+    const passwords = deepInputs('input[type="password"]').filter(visible);
+    // Şifre türündeki bir alan aslında kimlik alanıysa (ör. maskeli T.C.) yine tek adım sayılmaz.
+    if (passwords.some(p => !ID_HINT.test(describeField(p)))) return [];
+    return deepInputs('input').filter(input => visible(input) && TEXTY.includes(input.type) && identityScore(input) >= 2);
   }
   function close() {
     popup?.remove(); popup = null; options = [];
     for (const input of active ? [active.username, active.password] : []) {
       input?.removeAttribute('aria-expanded');
     }
+  }
+  // Tek kayıtlı hesap varsa ve alan boşsa yalnızca kullanıcı adı hemen yazılır (Chrome gibi).
+  // Şifre asla kendiliğinden doldurulmaz: seçilip Windows Hello ile onaylanınca dolar.
+  const prefilled = new WeakSet();
+  function prefill(input) {
+    if (accounts.length !== 1 || !input || prefilled.has(input) || input.value || !visible(input) || !accounts[0].username) return;
+    if (input.type === 'number' && !/^\d+$/.test(accounts[0].username)) return;
+    if (input.type === 'email' && !accounts[0].username.includes('@')) return;
+    prefilled.add(input);
+    nativeSet.call(input, accounts[0].username);
+    input.dispatchEvent(new Event('input',{bubbles:true})); input.dispatchEvent(new Event('change',{bubbles:true}));
   }
   function fill(target, account) {
     close();
@@ -106,17 +160,20 @@
     submitted.set(key,time); send({type:'pw.submitted',username,password});
   }
   function watch(input, target) {
-    input.addEventListener('input',() => { if (input.value) close(); else if (document.activeElement === input) show(target(), input); });
-    input.addEventListener('mousedown',() => { if (document.activeElement === input && !popup) setTimeout(() => show(target(), input), 0); });
+    input.addEventListener('input',() => { if (input.value) close(); else if (deepActive() === input) show(target(), input); });
+    input.addEventListener('mousedown',() => { if (deepActive() === input && !popup) setTimeout(() => show(target(), input), 0); });
   }
   function scan() {
-    const passwords = [...document.querySelectorAll('input[type="password"]')].filter(visible);
+    const passwords = deepInputs('input[type="password"]').filter(visible);
     const lone = loneUsernames();
     if ((passwords.length || lone.length) && !queried) { queried = true; send({type:'pw.query'}); }
     for (const username of lone) {
       if (usernames.has(username)) continue;
       usernames.add(username);
       const target = {username, password:null};
+      // Sayfa açılırken odaklanmış alan: odak olayı kaçtı, liste hemen gösterilir.
+      if (deepActive() === username && accounts.length) { active = target; setTimeout(() => show(target, username), 0); }
+      prefill(username);
       username.addEventListener('focus',() => { active = target; show(target,username); });
       username.addEventListener('keydown',event => keyboard(event,target));
       watch(username, () => target);
@@ -137,6 +194,7 @@
       const username = pair(password).username;
       if (username && !usernames.has(username)) {
         usernames.add(username);
+        if (deepActive() === username && accounts.length) { active = pair(password); setTimeout(() => show(pair(password), username), 0); }
         username.addEventListener('focus',() => { active = pair(password); show(active,username); });
         username.addEventListener('keydown',event => keyboard(event,pair(password)));
         watch(username, () => pair(password));
@@ -151,13 +209,15 @@
     if (message.type === 'pw.accounts' && Array.isArray(message.accounts)) {
       accounts = message.accounts.filter(a => a && Number.isSafeInteger(a.id) && typeof a.username === 'string');
       close();
-      const passwords = [...document.querySelectorAll('input[type="password"]')].filter(visible);
-      const target = passwords.find(p => p === document.activeElement || pair(p).username === document.activeElement);
+      const passwords = deepInputs('input[type="password"]').filter(visible);
+      const target = passwords.find(p => p === deepActive() || pair(p).username === deepActive());
       // İki adımlı girişte önceki adımda seçilen hesap listenin başına alınır.
       const remembered = memory.get();
       if (remembered?.id != null) accounts.sort((a,b) => (b.id === remembered.id) - (a.id === remembered.id));
-      if (target) show(pair(target),document.activeElement);
-      else { const lone = loneUsernames().find(u => u === document.activeElement); if (lone) { active = {username:lone, password:null}; show(active,lone); } }
+      if (target) show(pair(target),deepActive());
+      else { const lone = loneUsernames().find(u => u === deepActive()); if (lone) { active = {username:lone, password:null}; show(active,lone); } }
+      // Hesaplar geldi: tek adımlı girişte kullanıcı adı alanı tek hesapla doldurulur.
+      if (!passwords.length) for (const lone of loneUsernames()) prefill(lone);
     } else if (message.type === 'pw.secret' && pending && message.id === pending.id && typeof message.username === 'string' && typeof message.password === 'string') {
       const target = pending.target; pending = null;
       if (!visible(target.password) && !visible(target.username)) return;
@@ -195,5 +255,10 @@
     if (relevant && !timer) timer = setTimeout(() => { timer = null; scan(); },180);
   });
   observer.observe(document,{childList:true,subtree:true,attributes:true,attributeFilter:['type','hidden','style','class','autocomplete']});
+  // Odaklanan her alan o an değerlendirilir: Shadow DOM, sonradan çizilen formlar.
+  document.addEventListener('focusin', event => {
+    const el = event.composedPath?.()[0];
+    if (el instanceof HTMLInputElement && !fields.has(el) && !usernames.has(el)) setTimeout(scan, 0);
+  }, true);
   scan();
 })();
