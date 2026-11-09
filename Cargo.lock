@@ -616,7 +616,7 @@ checksum = "d0d5d4b1981b8bbbb7aed204cae5726d683d5d6ac7e74ec54122ea28f315e7c8"
 
 [[package]]
 name = "sqywein"
-version = "0.4.3"
+version = "0.5.0"
 dependencies = [
  "adblock",
  "embed-resource",
@@ -627,8 +627,10 @@ dependencies = [
  "sha2",
  "webview2-com",
  "windows",
+ "windows-core",
  "windows-future",
  "windows-numerics",
+ "zeroize",
  "zip",
 ]
 
@@ -1075,6 +1077,12 @@ dependencies = [
  "syn 3.0.9",
  "synstructure",
 ]
+
+[[package]]
+name = "zeroize"
+version = "1.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e13084392c5e4bc371903e2935a5eaeed24905a7511356b883835e18a78f6879"
 
 [[package]]
 name = "zerotrie"

@@ -51,3 +51,15 @@ Tek aktif sekmede belirgin bir RAM kazancı gösterilemedi: boşta -0,3 MB, hare
 Bu karşılaştırma, kalkan açık kozmetik filtrelemeyi, sınırlı önbelleklerin uzun kullanım etkisini veya RAM baskısındaki otomatik boşaltmayı ölçmez. Yeni işlevlerin doğruluk/kaynak döngüsü testleri `QA.md` içindedir; onların geçmesi, bu paketin toplam RAM'i belirli bir yüzde azalttığını kanıtlamaz.
 
 Ham veri: `ui/.qa/benchmark-1794060125899/results.json`, ortancalar aynı dizindeki `summary.json`. Tekrarlamak için `BENCH_BEFORE_EXE` yedek exe yoluna ayarlanıp `node scripts/benchmark.cjs` çalıştırılır. Araç yedeği kendi test klasörüne `sqywein.exe` adıyla kopyalar; kullanıcının profilini veya kurulu sürümünü değiştirmez.
+
+## 0.5.0 karşılaştırması (10 Kasım 2026)
+
+`scripts/benchmark.cjs`, `BENCH_ROUNDS=3`, `BENCH_SECONDS=6`, 144 Hz ekran. Ortancalar (Tarayıcı A/B: iki yaygın Chromium tabanlı tarayıcı, temiz profil, uzantısız):
+
+| | Boşta MB | Yükte MB | Boşta CPU % | Yükte CPU % | fps | p95 kare ms | >25 ms kare % |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Sqywein 0.5.0 | 93.2 | 135.5 | 0.06 | 1.01 | 142.2 | 7.1 | 0 |
+| Tarayıcı A | 211.3 | 218.7 | 1.37 | 0.41 | 144 | 7.1 | 0 |
+| Tarayıcı B | 163.9 | 211.7 | 0.68 | 0.67 | 144 | 7.1 | 0 |
+
+Açılış süresi bu yöntemle güvenilir değil (Sqywein turları arasında 1,0 s ile 5,9 s arası dağıldı; ölçüm CDP bağlantısını bekliyor), bu yüzden yayınlanmadı.

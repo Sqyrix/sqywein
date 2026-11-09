@@ -36,6 +36,30 @@ impl Drop for WindowRequest {
     fn drop(&mut self) { if let Some(d) = self.deferral.take() { unsafe { let _ = d.Complete(); } } }
 }
 
+pub struct PermissionRequest {
+    pub origin: String,
+    pub kind: i32,
+    args: ICoreWebView2PermissionRequestedEventArgs,
+    deferral: Option<ICoreWebView2Deferral>,
+}
+impl PermissionRequest {
+    pub fn decide(mut self, allow: bool, persist: bool) {
+        unsafe {
+            if let Ok(a3) = self.args.cast::<ICoreWebView2PermissionRequestedEventArgs3>() { let _ = a3.SetSavesInProfile(persist); }
+            let _ = self.args.SetState(if allow { COREWEBVIEW2_PERMISSION_STATE_ALLOW } else { COREWEBVIEW2_PERMISSION_STATE_DENY });
+            if let Some(d) = self.deferral.take() { let _ = d.Complete(); }
+        }
+    }
+}
+impl Drop for PermissionRequest {
+    fn drop(&mut self) { unsafe {
+        if let Some(d) = self.deferral.take() {
+            if let Ok(a3) = self.args.cast::<ICoreWebView2PermissionRequestedEventArgs3>() { let _ = a3.SetSavesInProfile(false); }
+            let _ = self.args.SetState(COREWEBVIEW2_PERMISSION_STATE_DEFAULT); let _ = d.Complete();
+        }
+    } }
+}
+
 /// Registration completion is a barrier before attaching the new window.
 pub fn prepare_window(view: &ICoreWebView2, id: u32) {
     let handler = AddScriptToExecuteOnDocumentCreatedCompletedHandler::create(Box::new(move |result, _| {
@@ -46,6 +70,7 @@ pub fn prepare_window(view: &ICoreWebView2, id: u32) {
 
 pub enum Event {
     EnvReady(Option<ICoreWebView2Environment>),
+    Permission(u32, Box<PermissionRequest>),
     ViewReady(u32, Option<ICoreWebView2Controller>),
     /// Ana çerçevede yeni gezinme başladı (hedef adres).
     NavStarting(u32, String),
@@ -78,7 +103,11 @@ pub enum Event {
     DataCleared(String, Option<u32>, bool),
     Zoom(u32),
     /// İç sayfadan gelen mesaj (JSON).
-    WebMessage(u32, String),
+    WebMessage(u32, String, String),
+    Scroll(u32, String, [f64; 2]),
+    Security(u32, serde_json::Value),
+    SitePermissions(u32,u64,String,serde_json::Value),
+    SiteCleared(String,u32,u64,String,bool),
     PageReply(u32, String),
     /// Mağazadaki "Chrome'a ekle" düğmesine basıldı: uzantının mağaza kimliği.
     StoreInstall(String),
@@ -103,6 +132,7 @@ pub struct CookieData {
     pub secure: bool,
     pub same_site: i32,
 }
+impl Drop for CookieData {fn drop(&mut self){use zeroize::Zeroize;self.value.zeroize();}}
 
 pub struct ExtensionInfo {
     pub id: String,
@@ -259,10 +289,34 @@ fn configure_mode(ctrl: &ICoreWebView2Controller, id: u32, background: u32, pref
         }
 
         let settings = view.Settings()?;
+        settings.SetAreHostObjectsAllowed(false)?;
+        if !preview {
+            if let Ok(receiver)=view.GetDevToolsProtocolEventReceiver(w!("Security.visibleSecurityStateChanged")) {
+                let _=receiver.add_DevToolsProtocolEventReceived(&DevToolsProtocolEventReceivedEventHandler::create(Box::new(move |_,args| {
+                    if let Some(args)=args {
+                        if let Ok(value)=serde_json::from_str::<serde_json::Value>(&string(|p|args.ParameterObjectAsJson(p))) { push(Event::Security(id,value["visibleSecurityState"].clone())); }
+                    } Ok(())
+                })), &mut 0);
+                let _=view.CallDevToolsProtocolMethod(w!("Security.enable"),w!("{}"),&CallDevToolsProtocolMethodCompletedHandler::create(Box::new(|_,_|Ok(()))));
+            }
+        }
         settings.SetIsStatusBarEnabled(true)?;
         // Hatalarda motorun (Edge'in) sayfası değil, Sqywein'in kendi sayfası görünür.
         settings.SetIsBuiltInErrorPageEnabled(preview)?;
         if preview { settings.SetIsWebMessageEnabled(false)?; settings.SetAreDefaultScriptDialogsEnabled(false)?; settings.SetAreDefaultContextMenusEnabled(false)?; }
+        if !preview {
+            let mut permission_token = 0;
+            view.add_PermissionRequested(&PermissionRequestedEventHandler::create(Box::new(move |_, args| {
+                let Some(args) = args else { return Ok(()) };
+                if let Ok(a2) = args.cast::<ICoreWebView2PermissionRequestedEventArgs2>() { a2.SetHandled(true)?; }
+                let origin = crate::passwords::origin(&string(|p| args.Uri(p))).unwrap_or_default();
+                let mut kind = COREWEBVIEW2_PERMISSION_KIND_UNKNOWN_PERMISSION;
+                args.PermissionKind(&mut kind)?;
+                crate::log::line(&format!("PERMISSION #{id} kind={} origin={origin}", kind.0));
+                let deferral = args.GetDeferral()?;
+                push(Event::Permission(id, Box::new(PermissionRequest {origin,kind:kind.0,args,deferral:Some(deferral)}))); Ok(())
+            })), &mut permission_token)?;
+        }
         if let Ok(s4) = settings.cast::<ICoreWebView2Settings4>() {
             // Şifreleri motorun kendi deposu değil, Sqywein'in şifre yöneticisi saklar.
             let _ = s4.SetIsPasswordAutosaveEnabled(false);
@@ -357,22 +411,31 @@ fn configure_mode(ctrl: &ICoreWebView2Controller, id: u32, background: u32, pref
         )?;
         // Yalnızca iç sayfaların mesajları dinlenir.
         view.add_WebMessageReceived(
-            &WebMessageReceivedEventHandler::create(Box::new(move |_, args| {
+            &WebMessageReceivedEventHandler::create(Box::new(move |sender, args| {
                 let Some(args) = args else { return Ok(()) };
                 if preview { return Ok(()); }
                 let mut source = PWSTR::null();
                 args.Source(&mut source)?;
                 let source = take_pwstr(source);
+                let Some(sender) = sender else { return Ok(()) };
+                if string(|p| sender.Source(p)) != source { return Ok(()); }
                 let mut json = PWSTR::null();
                 args.WebMessageAsJson(&mut json)?;
                 let json = take_pwstr(json);
+                if json.len() > 1024 * 1024 { return Ok(()); }
                 let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) else { return Ok(()) };
+                if v["type"] == "sq.scroll" {
+                    if let (Some(x),Some(y))=(v["x"].as_f64(),v["y"].as_f64()) {
+                        if x.is_finite() && y.is_finite() && (0.0..=1e8).contains(&x) && (0.0..=1e8).contains(&y) { push(Event::Scroll(id,source,[x,y])); }
+                    }
+                    return Ok(());
+                }
                 if v["type"] == "sq.rest.result" {
                     if let (Some(epoch), Some(discard), Some(safe)) = (v["epoch"].as_u64(), v["discard"].as_bool(), v["safe"].as_bool()) { push(Event::SleepChecked(id, epoch, discard, safe)); }
                     return Ok(());
                 }
                 if url::is_internal(&source) {
-                    push(Event::WebMessage(id, json));
+                    push(Event::WebMessage(id, source, json));
                     return Ok(());
                 }
                 if v["type"].as_str().is_some_and(|t| t.starts_with("pw.")) {
@@ -615,6 +678,12 @@ pub fn flag(f: impl FnOnce(&mut BOOL) -> Result<()>) -> bool {
 }
 
 const REST_GUARD: &str = r#"(() => {
+  if(window===window.top && /^https?:$/.test(location.protocol)) {
+    let timer=0;
+    const report=()=>{clearTimeout(timer);timer=0;try{chrome.webview.postMessage({type:'sq.scroll',x:Math.max(0,scrollX),y:Math.max(0,scrollY)});}catch{}};
+    addEventListener('scroll',()=>{if(!timer)timer=setTimeout(report,1500);},{passive:true});
+    addEventListener('pagehide',report);addEventListener('visibilitychange',()=>{if(document.hidden)report();});
+  }
   let edited = false, capture = false, unload = false, uploads = 0;
   const listen = window.addEventListener;
   window.addEventListener = function(type,...args) { if(type==='beforeunload')unload=true; return listen.call(this,type,...args); };
@@ -1129,6 +1198,38 @@ pub fn set_permission(view: &ICoreWebView2, tab: u32, origin: &str, kind: i32, s
         Ok(())
     }));
     unsafe { let _ = p.SetPermissionState(COREWEBVIEW2_PERMISSION_KIND(kind), &HSTRING::from(origin), COREWEBVIEW2_PERMISSION_STATE(state), &handler); }
+}
+
+pub fn site_permissions(view:&ICoreWebView2,id:u32,epoch:u64,origin:String) {
+    let Some(p)=profile(view).and_then(|p|p.cast::<ICoreWebView2Profile4>().ok()) else { return };
+    let handler=GetNonDefaultPermissionSettingsCompletedHandler::create(Box::new(move |result,list| {
+        let mut items=Vec::new();
+        if let (true,Some(list))=(result.is_ok(),list) { unsafe {
+            let mut count=0; list.Count(&mut count)?;
+            for i in 0..count { if let Ok(item)=list.GetValueAtIndex(i) {
+                if crate::passwords::origin(&string(|p|item.PermissionOrigin(p))).as_deref()!=Some(origin.as_str()) { continue; }
+                let mut kind=COREWEBVIEW2_PERMISSION_KIND_UNKNOWN_PERMISSION; let mut state=COREWEBVIEW2_PERMISSION_STATE_DEFAULT;
+                item.PermissionKind(&mut kind)?;item.PermissionState(&mut state)?;
+                items.push(serde_json::json!({"kind":kind.0,"state":state.0}));
+            }}
+        }}
+        push(Event::SitePermissions(id,epoch,origin.clone(),serde_json::json!(items))); Ok(())
+    }));
+    unsafe { let _=p.GetNonDefaultPermissionSettings(&handler); }
+}
+
+pub fn set_site_permission(view:&ICoreWebView2,id:u32,epoch:u64,origin:String,kind:i32,state:i32) {
+    let Some(p)=profile(view).and_then(|p|p.cast::<ICoreWebView2Profile4>().ok()) else { return };
+    let v=view.clone(); let o=origin.clone();
+    let handler=SetPermissionStateCompletedHandler::create(Box::new(move |result| { if result.is_ok() { site_permissions(&v,id,epoch,o.clone()); } Ok(()) }));
+    unsafe { let _=p.SetPermissionState(COREWEBVIEW2_PERMISSION_KIND(kind),&HSTRING::from(origin),COREWEBVIEW2_PERMISSION_STATE(state),&handler); }
+}
+
+pub fn clear_site(view:&ICoreWebView2,profile:String,id:u32,epoch:u64,origin:String) {
+    let params=serde_json::json!({"origin":origin,"storageTypes":"cookies,local_storage,indexeddb,websql,service_workers,cache_storage,file_systems"}).to_string();
+    let p=profile.clone(); let o=origin.clone();
+    let handler=CallDevToolsProtocolMethodCompletedHandler::create(Box::new(move |result,_| { push(Event::SiteCleared(p.clone(),id,epoch,o.clone(),result.is_ok())); Ok(()) }));
+    if unsafe { view.CallDevToolsProtocolMethod(w!("Storage.clearDataForOrigin"),&HSTRING::from(params),&handler) }.is_err() { push(Event::SiteCleared(profile,id,epoch,origin,false)); }
 }
 
 pub fn set_muted(view: &ICoreWebView2, muted: bool) {

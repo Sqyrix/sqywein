@@ -12,6 +12,7 @@ pub(super) enum Surface {
     Link(String),
     File(String),
     Notice(String),
+    Site { tab:u32, epoch:u64, origin:String },
 }
 
 impl App {
@@ -19,7 +20,7 @@ impl App {
         self.close_menu();
         self.close_popup();
         self.overlay_generation = self.overlay_generation.wrapping_add(1);
-        let kind = match &surface { Surface::Spotlight => "spotlight", Surface::Tabs => "tabs", Surface::Download(_) => "download", Surface::Text(_) => "text", Surface::Notice(_) => "notice", Surface::Link(_) | Surface::File(_) => "link" };
+        let kind = match &surface { Surface::Site{..}=>"site", Surface::Spotlight => "spotlight", Surface::Tabs => "tabs", Surface::Download(_) => "download", Surface::Text(_) => "text", Surface::Notice(_) => "notice", Surface::Link(_) | Surface::File(_) => "link" };
         let scale = self.scale();
         let mut owner = RECT::default();
         unsafe { let _ = GetWindowRect(self.hwnd, &mut owner); }
@@ -59,6 +60,7 @@ impl App {
     pub(super) fn surface_message(&mut self, tab: u32, msg: &Value) {
         if tab != POPUP_VIEW || self.surface.is_none() { return; }
         let kind = msg["type"].as_str().unwrap_or("");
+        if kind.starts_with("overlay.site.") { self.site_message(kind,msg); return; }
         match kind {
             "overlay.close" => { self.close_popup(); self.focus_content(); }
             "overlay.activate" => {
@@ -86,6 +88,7 @@ impl App {
                 if let Some(cmd) = cmd { self.close_popup(); self.menu_command(cmd); }
             }
             "overlay.get" => {
+                if matches!(self.surface,Some(Surface::Site{..})) { self.refresh_site_info(); return; }
                 let query: String = msg["query"].as_str().unwrap_or("").chars().take(200).collect();
                 let query = query.to_lowercase();
                 let private = self.tabs[self.active].private;

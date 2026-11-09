@@ -5,16 +5,18 @@
 <h1 align="center">Sqywein</h1>
 
 <p align="center">
-  <b>Windows için inanılmaz hafif, sade ve hızlı bir web tarayıcısı.</b><br>
-  Cam efektli modern arayüz, YouTube'da da çalışan reklam engelleyici, Windows Hello korumalı şifre kasası.
+  <b>Windows için hafif, sade ve akıcı bir web tarayıcısı.</b><br>
+  Rust ile yazılmış yerel arayüz · YouTube dahil reklam engelleme · Windows Hello korumalı şifre kasası · sayfa çevirisi
 </p>
 
 <p align="center">
   <a href="https://github.com/Sqyrix/sqywein/releases/latest"><b>⬇ Son sürümü indir</b></a>
   ·
-  <a href="#kurulum">Kurulum</a>
+  <a href="#özellikler">Özellikler</a>
   ·
-  <a href="#kullanım">Kullanım</a>
+  <a href="#ölçümler">Ölçümler</a>
+  ·
+  <a href="#testler">Testler</a>
   ·
   <a href="#klavye-kısayolları">Kısayollar</a>
   ·
@@ -28,27 +30,16 @@
 
 ---
 
-## Neden Sqywein?
+## Kısaca
 
-Çoğu tarayıcı her yıl biraz daha ağırlaşıyor. Sqywein tam tersini hedefliyor: **gerçek bir tarayıcının her işini yapan, ama bilgisayarı yormayan** bir uygulama.
-
-- **Hafif:** Tarayıcının kendi arayüzü yaklaşık **20 MB** bellekle çalışır ve **0,1 saniyede** açılır. Arayüz Rust ile yazıldı ve doğrudan Windows'un çizim altyapısını (Direct2D) kullanıyor; Electron ya da ağır bir arayüz kütüphanesi yok.
-- **Modern motor:** Sayfaları Microsoft Edge'in motoru (WebView2, Chromium) gösterir. Siteler Chrome ve Edge'de nasıl görünüyorsa burada da öyle görünür.
-- **Uyuyan sekmeler:** Kullanmadığın sekmeler bellekten çıkarılır, tıklayınca kaldığı yerden geri gelir. 8 siteli bir oturum diğer tarayıcıların çok altında bellekle açılır.
-- **Reklamsız:** Yerleşik reklam engelleyici YouTube'daki reklamları da engeller. Eklenti kurmana gerek yok.
-- **Göze hoş:** Safari'den ilham alan sade düzen, Windows 11'in bulanık cam efekti (Acrylic), yumuşak animasyonlar.
-
-### Ölçümler
-
-Aynı bilgisayarda, Sqywein'in eski C#/WPF sürümüyle karşılaştırma (toplam = arayüz + motorun bütün süreçleri):
-
-| Senaryo | Eski açılış | Sqywein açılış | Eski bellek | Sqywein bellek |
-|---|---:|---:|---:|---:|
-| Boş başlangıç | 1132 ms | **290 ms** | 36 MB | **20 MB** |
-| Reklamlı haber sitesi | 836 ms | **105 ms** | 404 MB | **289 MB** |
-| 8 siteli oturumu geri yükleme | 887 ms | **110 ms** | 918 MB | **166 MB** |
-
-Ayrıntılı ölçüm yöntemi ve Edge/Chrome karşılaştırması: [PERFORMANCE.md](PERFORMANCE.md).
+| | |
+|---|---|
+| **Arayüz** | Rust + Direct2D/DirectWrite ile doğrudan Windows'a çizilir. Electron, web tabanlı arayüz ya da ayrı bir arayüz çatısı yok. Arayüz süreci ~20 MB. |
+| **Sayfa motoru** | Windows'un WebView2 bileşeni (Chromium). Siteler, Chromium tabanlı tarayıcılarda nasıl görünüyorsa öyle görünür; güvenlik güncellemelerini Windows Update getirir. |
+| **Reklam engelleme** | Rust ile yazılmış açık kaynak `adblock-rust` motoru, EasyList/EasyPrivacy ve uBlock Origin listeleri, Türkçe liste, ayrıca YouTube'a özel modül. Eklenti gerekmez. |
+| **Gizlilik** | Telemetri yok. Geçmiş, oturum, ayarlar ve şifreler Windows DPAPI ile şifrelenmiş olarak yalnızca bu bilgisayarda tutulur. |
+| **Kurulum** | 1 dosya, yönetici izni gerekmez, ~15 MB. Otomatik güncelleme SHA-256 ile doğrulanır. |
+| **Lisans** | MIT |
 
 ---
 
@@ -56,44 +47,88 @@ Ayrıntılı ölçüm yöntemi ve Edge/Chrome karşılaştırması: [PERFORMANCE
 
 > Sürümden sürüme yenilikler: [CHANGELOG.md](CHANGELOG.md)
 
-### 0.4.0 ile gelenler
-- **Sayfa çevirisi:** Yabancı dildeki siteler kendiliğinden Türkçeye (ya da bilgisayarının diline) çevrilir; adres alanındaki **文A** ile kapatılır.
-- **Başlangıç sayfası:** Favoriler (sık girdiğin siteler kendiliğinden eklenir), havaya göre şekillenen Liquid Glass hava durumu kartı ve döviz kartı.
-- **macOS'tan esinlenen araçlar:** Hızlı erişim, sekme ızgarası, bağlantı önizlemesi, Hızlı Bakış, Canlı Metin, görüntü içinde görüntü, odak modu, paylaşım paneli (QR kod).
-- **Gizli ↔ normal sekme geçişi**, ana sayfa düğmesi, daha akıcı sekme sürükleme ve daha net yazılar.
+### 0.5.0 ile gelenler
+- **macOS tarzı menüler:** Menü düğmesinde Dosya, Düzen, Görünüm, Geçmiş, Yer İşaretleri, Geliştir, Pencere ve Yardım alt menüleri; alt menüler aynı panelde açılır.
+- **Çoklu pencere:** Yeni pencere (**Ctrl+N**) ve yeni gizli pencere (**Ctrl+Shift+N**). Her pencere kendi sekmelerini tutar; yer işaretleri, geçmiş, ayarlar ve şifreler pencereler arasında çakışmadan birleştirilir.
+- **Okuyucu (Ctrl+Shift+R):** Makaleyi reklamsız, büyük ve okunaklı yazıyla açar. **Okuma Listesi (Ctrl+Shift+D):** sayfayı sonra okumak için kaydet.
+- **Farklı kaydet, sayfa kaynağı, tam ekran (F11)**, tüm sekmeleri yer işaretlerine ekleme, Geçmiş menüsünde son ziyaret edilen siteler.
+- **Daha akıllı otomatik doldurma:** T.C. kimlik, telefon ve müşteri numarasıyla girişler, iki adımlı girişler ve web bileşenleri (Shadow DOM) içindeki formlar tanınır; arama, doğrulama kodu, kart ve bülten alanları karıştırılmaz.
 
 ### Arayüz
-- **Safari tarzı düzen:** Üstte tek satır araç çubuğu, tam ortada adres alanı, altında eşit genişlikte sekmeler.
-- **Cam efekti:** Araç çubuğu, sekmeler, menüler ve başlangıç sayfası Windows 11'in bulanık camıyla yarı saydam görünür. İstersen Ayarlar'dan kapatabilirsin.
-- **Akıllı adres alanı:** Yazmıyorken yalnızca site adını gösterir (`github.com`). Tıklayınca tam adres seçili gelir. Yazarken geçmişten, yer işaretlerinden ve arama motorundan öneriler sunar.
-- **Dört tema:** Sistem (Windows'u izler), Açık, Koyu ve klasik mor Sqywein. Altı vurgu rengi.
-- **Başlangıç sayfası:** Arama kutusu ve sık kullandığın siteler için kısayollar.
-- **Komutlar adres alanında:** iki harf yazınca açık sekmeler ve tarayıcı komutları da listelenir ("geçmiş", "indirmeler"…).
-- **Yer işaretleri çubuğu**, sekme sabitleme, sekmeyi sessize alma ve uyutma.
-- Windows 11'in **Ek Yerleşimler** menüsü ve yerel pencere düğmeleri.
+- **Tek satır araç çubuğu:** ortada adres alanı, altında eşit genişlikte sekmeler; geri, ileri ve ana sayfa düğmeleri.
+- **Cam efekti:** Araç çubuğu, sekmeler, menüler ve başlangıç sayfası Windows 11'in bulanık camıyla (Acrylic) yarı saydam. Pilde kendiliğinden kapanır, Ayarlar'dan tamamen kapatılabilir.
+- **Akıllı adres alanı:** Yazmıyorken yalnızca site adını gösterir. Yazarken geçmiş, yer işaretleri, açık sekmeler, komutlar ("geçmiş", "indirmeler"…) ve arama önerileri tek listede.
+- **Başlangıç sayfası:** Favoriler (en az 10 kez girdiğin siteler kendiliğinden eklenir), havaya göre şekillenen hava durumu kartı ve döviz kartı.
+- **Dört tema** (Sistem, Açık, Koyu, Sqywein moru) ve altı vurgu rengi. Yazılar menülerde ClearType, camda gri tonlamalı yumuşatma ile çizilir.
+- **Erişilebilirlik:** Windows UI Automation (ekran okuyucular), **F6/Shift+F6** ile araç çubuğu ↔ sekmeler ↔ sayfa, yüksek kontrast desteği.
 
 ### Gizlilik ve güvenlik
-- **Reklam ve izleyici engelleyici:** uBlock Origin ve EasyList listeleriyle çalışan, Brave'in açık kaynak `adblock-rust` motoru. Dört seviye: **Kapalı / Temel / İdeal / Tam** ("Tam" çerez uyarılarını da gizler). Her site için ayrı ayrı ayarlanabilir.
-- **YouTube reklamları:** Video öncesi ve arası reklamları engelleyen kendi YouTube modülü.
-- **Şifre kasası:** Şifreler Windows'un kendi şifrelemesiyle (DPAPI) yalnızca senin hesabında saklanır. Doldurma Chrome'daki gibi önce sorar, sonra **Windows Hello** (yüz, parmak izi ya da PIN) onayı ister. Chrome/Google Şifre Yöneticisi'nden CSV içe ve dışa aktarma.
-- **Gizli sekmeler:** Geçmiş, çerez ve indirme kaydı bırakmaz.
-- **Site izinleri:** Kamera, mikrofon, konum, bildirim ve pano izinleri ayarlardan yönetilir.
+- **Reklam ve izleyici engelleyici:** Dört seviye (**Kapalı / Temel / İdeal / Tam**; "Tam" çerez uyarılarını da gizler), site başına ayrı seviye. Adres alanındaki kalkan, sayfada engellenen istek sayısını gösterir.
+- **YouTube reklamları:** Video öncesi ve arası reklamlar oynatıcıya hiç ulaşmaz. Ayrıntı [aşağıda](#youtube-reklamları-nasıl-engelleniyor).
+- **Şifre kasası:** Şifreler DPAPI ile şifrelenir. Liste önce gösterilir, şifre yalnızca seçip **Windows Hello** (yüz, parmak izi, PIN) ile onayladıktan sonra yazılır; kasa, şifrenin ait olduğu sitenin kökeniyle eşleşmeyen sayfaya şifre vermez. CSV içe/dışa aktarma.
+- **Gizli sekmeler ve gizli pencereler:** Geçmiş, çerez, kaydırma konumu ve indirme kaydı bırakmaz.
+- **Site bilgileri (Alt+I):** Bağlantı/sertifika bilgisi, kamera, mikrofon, konum, bildirim ve pano izinleri, siteye özel veri temizleme.
 
 ### Günlük kullanım
-- **Çeviri paneli:** Hedef dil Windows'un görüntüleme dilinden alınır. Kaynak/hedef dil seçimi, daima/asla çeviri ve site istisnaları vardır. Çevrilen metin Google'a gönderilir.
-- **Hızlı erişim:** `Ctrl+Space` ile sekmeler, geçmiş, yer işaretleri ve komutlar tek aramada.
-- **Sekmelere genel bakış:** `Ctrl+Shift+A` ile küçük resimli, filtrelenebilir ızgara.
-- **Bağlantı önizlemesi:** `Shift+tık`; sayfayı ayrı sekmeye geçmeden incele, istersen “Sekmede aç”.
-- **Hızlı Bakış:** Tamamlanan indirmeye basılı tut; resim, PDF ve metin dosyalarını harici uygulama açmadan incele.
-- **Canlı Metin:** Resme sağ tık → “Canlı Metin”; görünür bölümdeki yazıyı Windows OCR ile yerel olarak tanı ve kopyala.
-- **Odak modu, paylaşım paneli ve görüntü içinde görüntü.** Ayrıntılar ve sınırlar: [UTILITIES.md](UTILITIES.md).
-- **Chrome Web Mağazası uzantıları:** Mağaza sayfasında "Sqywein'e ekle" düğmesi çıkar. Kurmadan önce uzantının istediği izinler gösterilir.
-- **İndirmeler:** İlerleme halkası, hız ve kalan süre. Dosya türüne göre doğru simge.
-- **Oturum geri yükleme:** Açık sekmeler, pencere boyutu ve yeri bir sonraki açılışta aynen gelir. Google gibi sitelerdeki oturumların kapanmaz.
-- **Profiller:** Birbirinden tamamen ayrı çerez, geçmiş ve şifre kasası.
-- **Yakınlaştırma:** Varsayılan olarak Windows'un ölçek ayarına uyar; site başına hatırlanır.
-- **Varsayılan tarayıcı** olabilir; diğer programlardan açılan bağlantılar açık pencerede yeni sekmede açılır.
-- **Otomatik güncelleme:** Yeni sürüm GitHub'dan arka planda indirilir, SHA-256 özetiyle doğrulanır. Araç çubuğundaki "Güncelle" düğmesine basınca sekmelerin kaybolmadan yeni sürüm açılır.
+- **Sayfa çevirisi:** Bilgisayarın dili dışındaki siteler kendiliğinden çevrilir (kapatılabilir). Sonradan yüklenen içerik de çevrilir; sayfa yeniden yüklenmez, oturum bozulmaz.
+- **Hızlı erişim (Ctrl+Space):** sekmeler, geçmiş, yer işaretleri ve komutlar tek aramada.
+- **Sekmelere genel bakış (Ctrl+Shift+A):** küçük resimli, filtrelenebilir ızgara.
+- **Bağlantı önizlemesi (Shift+tık)**, **Hızlı Bakış** (indirilen resim/PDF/metin), **Canlı Metin** (resimdeki yazıyı Windows OCR ile yerel olarak seç), **görüntü içinde görüntü**, **odak modu**, QR kodlu **paylaşım paneli**. Ayrıntılar: [UTILITIES.md](UTILITIES.md).
+- **Uyuyan sekmeler:** Bakmadığın sekmeler dondurulur, uzun süre kullanılmayanlar bellekten çıkarılır; tıklayınca kaldığın yerden (kaydırma konumuyla) döner. Video, görüntülü görüşme, yükleme ve doldurulmuş formlar olan sekmeler korunur.
+- **Uzantılar:** Chrome Web Mağazası sayfasında "Sqywein'e ekle" düğmesi çıkar; kurmadan önce istediği izinler gösterilir.
+- **Oturum geri yükleme**, profiller (ayrı çerez/geçmiş/şifre), site başına yakınlaştırma, varsayılan tarayıcı olma, arka planda doğrulanan otomatik güncelleme.
+
+### YouTube reklamları nasıl engelleniyor?
+Liste tabanlı engelleme YouTube'da yetmez, çünkü reklamlar videoyla aynı adresten gelir. Sqywein sayfa açılmadan önce yerleştirilen küçük bir modül kullanır:
+1. Oynatıcının aldığı yanıttan (`/youtubei/v1/player`, `ytInitialPlayerResponse`) yalnızca reklam alanları (`adPlacements`, `playerAds`, `adSlots`) çıkarılır; video akışı, URL ve durum kodu olduğu gibi kalır. Yanıt nesneleri değiştirilmez, böylece site bunu fark etmez.
+2. Buna rağmen bir reklam başlarsa ses geçici olarak kapatılır, reklam sonuna atlanır, "Atla" düğmesine basılır ve ardından önceki ses durumu geri yüklenir. Canlı yayınlar sonsuza sarılmaz.
+3. "Reklam engelleyici" uyarı penceresi kapatılırken sayfayı kilitleyen karartma katmanı da kaldırılır; hesapla ilgili diğer pencerelere dokunulmaz.
+4. O site için engelleme kapatılırsa modül kendini tamamen geri alır.
+
+Bu davranışların her biri, gerçek modül kodu üzerinde çevrimdışı testlerle (`ui/test-youtube.cjs`) doğrulanır.
+
+---
+
+## Ölçümler
+
+Aynı bilgisayarda, aynı yerel test sayfasıyla Sqywein ve iki yaygın Chromium tabanlı tarayıcı (adları verilmedi: **Tarayıcı A**, **Tarayıcı B**) karşılaştırıldı. Her tarayıcı boş, ayrı bir profille, uzantısız ve reklam engelleme kapalı açıldı; sıra her turda değiştirilerek **3 tur** ölçüldü, tablodaki değerler ortancadır.
+
+Test sayfası: 150 görselli, kendi kendine kayan ve her 100 ms'de 150 öğesi güncellenen bir akış (ağ yok). Bellek, tarayıcının **bütün alt süreçlerinin** özel çalışma kümesi toplamıdır. CPU, tüm mantıksal çekirdeklere göre yüzdedir. Kare süreleri sayfanın içinden `requestAnimationFrame` ile ölçüldü (ekran 144 Hz).
+
+| | Sqywein | Tarayıcı A | Tarayıcı B |
+|---|---:|---:|---:|
+| Bellek, boşta | **93 MB** | 211 MB | 164 MB |
+| Bellek, kayarken ve güncellenirken | **136 MB** | 219 MB | 212 MB |
+| CPU, boşta | **%0,06** | %1,37 | %0,68 |
+| CPU, yük altında | %1,01 | %0,41 | %0,67 |
+| Kare hızı, yük altında | 142 fps | 144 fps | 144 fps |
+| 95. yüzdelik kare süresi | 7,1 ms | 7,1 ms | 7,1 ms |
+| Takılan kare (> 25 ms) | **%0** | %0 | %0 |
+
+**Ne anlama geliyor?**
+- Aynı sayfayı gösterirken Sqywein **%36–56 daha az bellek** kullanıyor; boştayken neredeyse hiç işlemci harcamıyor (arayüz yalnızca bir şey değiştiğinde çizilir, arka plan zamanlayıcıları pencere pasifken seyrekleşir).
+- Akıcılık: Üç tarayıcı da 144 Hz ekranın her karesini yetiştiriyor; 95. yüzdelik kare süresi 7,1 ms (bir ekran yenilemesi 6,9 ms) ve takılma yok. Yani hafiflik akıcılıktan ödün verilerek elde edilmiyor. Sqywein'in tek turda ölçülen ufak düşüşü (127 fps) ortancaya yansımadı.
+- Yük altındaki CPU'da Sqywein biraz daha yüksek; fark, sayfa çizimini tarayıcı penceresine taşıyan WebView2 katmanından geliyor.
+- Sayfa yükleme süresi (gezinmeden yüklenmeye) Sqywein'de 125–185 ms. Uygulamanın açılış süresi bu yöntemle (hata ayıklama bağlantı noktası üzerinden) güvenilir ölçülemediği için tabloya konmadı.
+
+Ölçümü kendin tekrarlamak için: `scripts/benchmark.cjs` (yöntem ve ham veriler [PERFORMANCE.md](PERFORMANCE.md)'de).
+
+---
+
+## Testler
+
+Her gönderimde GitHub Actions'da Rust testleri ve Clippy çalışır; tarayıcı tabanlı testler yerelde çalıştırılır. Testler gerçek hesap, çerez veya canlı site kullanmaz; sitelerin yapısı yerel sunucuda örneklenir.
+
+| Test | Kapsam |
+|---|---|
+| `cargo test` | 63 test: adres/arama ayrımı, geçmiş önerileri, oturum ve ayar birleştirme (çoklu pencere), şifreli depolama, profil yolu güvenliği, güncelleme doğrulaması, kısayol tablosu, monitör çalışma alanı |
+| `cargo clippy -D warnings` | Bütün hedefler, uyarısız |
+| `ui/test-autofill.cjs` | 24 kontrol: T.C. kimlik (sayı alanı), telefonla giriş, arama kutusu + giriş, doğrulama kodu, kart alanı, etiketsiz sonradan çizilen form, Shadow DOM'lu iki adımlı giriş, bülten ve iletişim formları |
+| `ui/test-security.cjs` | 29 kontrol: şifrenin yalnızca doğru belgeye verilmesi, yanlış belge jetonunun reddi, sekme uyutma korumaları (form, medya, kamera, yükleme, canlı bağlantı), reklam kuralı birikmemesi |
+| `ui/test-youtube.cjs` | 18 kontrol: reklam alanlarının çıkarılması, video akışının korunması, atlama, ses geri yükleme, uyarı penceresi, modülün kapatılınca geri alınması |
+| `ui/test-ui.cjs` | 201 kontrol: iç sayfalar (Ayarlar, Geçmiş, İndirmeler, Yer işaretleri, Şifreler, Uzantılar), iki pencere genişliğinde, dış ağ isteği olmadan |
+| `ui/test-native.cjs` | Derlenmiş exe üzerinde: site izinleri kabul/ret, açılır pencere ve OAuth akışları |
+| `scripts/benchmark.cjs` | Bu sayfadaki ölçümler |
 
 ---
 
@@ -102,74 +137,32 @@ Ayrıntılı ölçüm yöntemi ve Edge/Chrome karşılaştırması: [PERFORMANCE
 | | En az | Önerilen |
 |---|---|---|
 | İşletim sistemi | Windows 10 (64 bit) | Windows 11 22H2 ya da üstü |
-| İşlemci | x64 | x64 |
 | Bellek | 4 GB | 8 GB |
-| Disk | 15 MB (program) | — |
-| Ek bileşen | Microsoft Edge WebView2 Runtime | Windows 11'de zaten kurulu |
+| Disk | 15 MB | — |
+| Ek bileşen | WebView2 Runtime | Windows 11'de zaten kurulu |
 
-- **WebView2 Runtime** Windows 11'de hazır gelir. Windows 10'da yoksa [Microsoft'tan ücretsiz indirebilirsin](https://developer.microsoft.com/microsoft-edge/webview2/) ("Evergreen Bootstrapper").
-- **Cam efekti** Windows 11 22H2 ve sonrasında çalışır. Eski sürümlerde ya da Windows'ta *Saydamlık efektleri* kapalıysa arayüz opak çizilir; diğer her şey aynı çalışır.
-- **Windows Hello** (şifre doldurmayı onaylamak için) yüz tanıma, parmak izi ya da PIN ister. Windows Hello kurulu değilse Windows hesap şifresi sorulur.
+- **WebView2 Runtime** Windows 11'de hazır gelir. Windows 10'da yoksa [Microsoft'tan ücretsiz indirilebilir](https://developer.microsoft.com/microsoft-edge/webview2/).
+- **Cam efekti** Windows 11 22H2 ve sonrasında çalışır; eski sürümlerde arayüz opak çizilir.
+- **Windows Hello** kurulu değilse şifre doldururken Windows hesap şifresi sorulur.
 
 ---
 
 ## Kurulum
 
 1. [Releases](https://github.com/Sqyrix/sqywein/releases/latest) sayfasından **`SqyweinSetup.exe`** dosyasını indir.
-2. Çift tıkla, **Tamam** de. Yönetici izni gerekmez; Sqywein yalnızca senin kullanıcı hesabına (`%LOCALAPPDATA%\Programs\Sqywein`) kurulur.
-3. Başlat menüsünde ve masaüstünde **Sqywein** kısayolu oluşur; Sqywein kendiliğinden açılır.
+2. Çift tıkla. Yönetici izni gerekmez; Sqywein yalnızca senin hesabına (`%LOCALAPPDATA%\Programs\Sqywein`) kurulur, Başlat menüsüne ve masaüstüne kısayol ekler.
 
-> **"Windows bilgisayarınızı korudu" uyarısı:** Sqywein henüz dijital olarak imzalanmadığı için Windows SmartScreen ilk açılışta bu uyarıyı gösterebilir. **Ek bilgi → Yine de çalıştır** ile devam edebilirsin. İndirdiğin dosyanın değiştirilmediğini, Releases sayfasındaki `sqywein.exe.sha256` özetiyle karşılaştırarak doğrulayabilirsin:
+> **"Windows bilgisayarınızı korudu" uyarısı:** Sqywein henüz dijital olarak imzalı değil. **Ek bilgi → Yine de çalıştır** ile devam edebilirsin. Dosyanın değişmediğini Releases'teki `.sha256` özetiyle doğrulayabilirsin:
 >
 > ```powershell
 > (Get-FileHash .\SqyweinSetup.exe -Algorithm SHA256).Hash
 > ```
 
-**Görev çubuğuna sabitleme:** Sqywein açıkken görev çubuğundaki simgesine sağ tıkla → **Görev çubuğuna sabitle**.
+**Güncelleme:** Sqywein 12 saatte bir yeni sürüme bakar; indirip doğruladıktan sonra araç çubuğunda **Güncelle** düğmesi çıkar, basınca sekmeler kaybolmadan yeni sürüm açılır. Simge, kısayollar ve "Yüklü uygulamalar" kaydı da kendiliğinden yenilenir.
 
-**Varsayılan tarayıcı yapma:** İlk açılışta çıkan şeritten ya da *Ayarlar → Sistem → Varsayılan tarayıcı olarak ayarla* ile. Windows'un kendi ekranı açılır; orada Sqywein'i seç.
+**Kaldırma:** *Ayarlar → Uygulamalar → Yüklü uygulamalar → Sqywein → Kaldır*. Tarama verilerinin silinip silinmeyeceği ayrıca sorulur (varsayılan: silme).
 
-### Güncelleme
-
-Sqywein 12 saatte bir yeni sürüm olup olmadığına bakar. Yeni sürüm indirilip doğrulanınca araç çubuğunda **Güncelle** düğmesi çıkar. Basınca açık sekmeler kaydedilir, yeni sürüm açılır. Elle denetlemek için: *Ayarlar → Güncellemeler → Güncellemeleri denetle*. Otomatik güncellemeyi aynı yerden kapatabilirsin.
-
-Yeni bir `SqyweinSetup.exe`'yi kurulu sürümün üzerine çalıştırmak da güncelleme yapar; verilerin korunur.
-
-### Kaldırma
-
-*Windows Ayarlar → Uygulamalar → Yüklü uygulamalar → Sqywein → Kaldır*. Kaldırırken tarama verilerinin (geçmiş, şifreler, çerezler) silinip silinmeyeceği ayrıca sorulur; varsayılan cevap **Hayır**dır, yani yeniden kurarsan kaldığın yerden devam edersin.
-
----
-
-## Kullanım
-
-### Adres alanı
-- Bir adres (`github.com`) ya da aranacak bir şey yaz, **Enter**'a bas. Adres değilse seçili arama motorunda aranır (Google, Bing, DuckDuckGo, Yandex ya da Brave Search).
-- Yazarken açılan listede ok tuşlarıyla gezin. Öneriler geçmişinden, yer işaretlerinden ve arama motorundan gelir.
-- Adres alanının sağ ucunda: **yenile**, **yıldız** (yer işaretine ekle), **kalkan** (bu sitedeki engelleme durumu) ve yakınlaştırma oranı.
-
-### Sekmeler
-- Yeni sekme: araç çubuğundaki **+** ya da **Ctrl+T**. Kapatmak: sekmenin solundaki **×**, **Ctrl+W** ya da orta tıklama.
-- Kapattığın sekmeyi geri getirmek: **Ctrl+Shift+T**.
-- Sekmeye sağ tıklayarak sabitleyebilir, sessize alabilir, uyutabilir, çoğaltabilir ya da diğerlerini kapatabilirsin.
-- Uzun süre bakmadığın sekmeler sönük görünür: bellekten çıkarılmışlardır, tıklayınca geri gelirler.
-
-### Reklam engelleyici
-- Adres alanındaki **kalkan** simgesi o sayfada engellenen istek sayısını gösterir. Tıklayınca bu site için seviye değiştirilebilir: bozulan bir sitede **Kapalı** seçip sayfayı yenilemek yeter.
-- Genel seviye: *Ayarlar → Reklam engelleyici*.
-
-### Şifreler
-- Bir sitede giriş yapınca Sqywein şifreyi kaydetmek isteyip istemediğini sorar.
-- Sonraki girişte kullanıcı adı alanına tıkla: kayıtlı hesaplar listelenir. Hesabı seçince Windows Hello onayından sonra doldurulur.
-- Bütün şifreler: menü → **Şifreler** (`sqywein://passwords`). Google Şifre Yöneticisi'nden indirdiğin CSV'yi buradan içe aktarabilirsin.
-
-### Uzantılar
-- [Chrome Web Mağazası](https://chromewebstore.google.com)'nda bir uzantı sayfasını aç, adres alanındaki **Sqywein'e ekle** düğmesine bas.
-- Yapboz simgesinden uzantıları aç, sabitle ya da yönet.
-- Not: Uzantı desteğini WebView2 sağlıyor ve henüz Chrome kadar geniş değil. Reklam engelleyici, tema ve basit araç uzantıları çalışır; bazı karmaşık uzantılar kısmen çalışabilir.
-
-### Verilerin nerede?
-Bütün veriler bilgisayarında, `%LOCALAPPDATA%\Sqywein` klasöründedir. Hiçbir veri Sqywein'e ya da başka bir sunucuya gönderilmez. Bağlandığı adresler yalnızca şunlar: reklam listelerinin indirilmesi, arama önerileri (kapatılabilir) ve GitHub'daki güncelleme denetimi (kapatılabilir).
+**Veriler:** `%LOCALAPPDATA%\Sqywein`. Sqywein'in kendi bağlandığı adresler yalnızca şunlar: reklam listeleri, arama önerileri (kapatılabilir), çeviri (yalnızca çevrilen sayfanın metni), hava/kur kartları (kapatılabilir) ve GitHub'daki güncelleme denetimi (kapatılabilir).
 
 ---
 
@@ -177,64 +170,54 @@ Bütün veriler bilgisayarında, `%LOCALAPPDATA%\Sqywein` klasöründedir. Hiçb
 
 | Kısayol | İşlev |
 |---|---|
-| **Ctrl+Space** | Hızlı erişim |
-| **Ctrl+Shift+A** | Sekmelere genel bakış |
-| **Ctrl+Shift+Y** | Çevir / orijinale dön |
-| **Ctrl+Shift+F** | Odak modu |
-| **Ctrl+T** | Yeni sekme |
-| **Ctrl+Shift+N** | Yeni gizli sekme |
+| **Ctrl+T** / **Ctrl+N** / **Ctrl+Shift+N** | Yeni sekme / yeni pencere / yeni gizli pencere |
 | **Ctrl+W** / **Ctrl+F4** | Sekmeyi kapat |
 | **Ctrl+Shift+T** | Kapatılan sekmeyi geri aç |
 | **Ctrl+Tab** / **Ctrl+Shift+Tab** | Sonraki / önceki sekme |
-| **Ctrl+1 … Ctrl+8** | O sıradaki sekmeye git |
-| **Ctrl+9** | Son sekmeye git |
-| **Ctrl+L** / **Ctrl+K** / **Ctrl+E** / **Alt+D** | Adres alanına git (sekme ve komut araması da buradan) |
+| **Ctrl+1 … 8** / **Ctrl+9** | O sıradaki / son sekme |
+| **Ctrl+L** / **Ctrl+K** / **Alt+D** | Adres alanı |
 | **Alt+←** / **Alt+→** | Geri / ileri |
 | **F5** / **Ctrl+R** | Yenile |
-| **Ctrl+D** | Yer işaretine ekle |
-| **Ctrl+Shift+O** | Yer işaretleri |
-| **Ctrl+H** | Geçmiş |
-| **Ctrl+J** | İndirmeler |
-| **Ctrl+F** | Sayfada bul |
-| **Ctrl+P** | Yazdır |
-| **Ctrl + / Ctrl −** | Yakınlaştır / uzaklaştır |
-| **F12** | Geliştirici araçları |
-| **Ctrl+Space** | Hızlı erişim (sekme, geçmiş, yer işareti, komut) |
+| **Ctrl+D** / **Ctrl+Shift+D** | Yer işareti ekle / Okuma Listesine ekle |
+| **Ctrl+Shift+R** | Okuyucu |
+| **Ctrl+Shift+O** / **Ctrl+H** / **Ctrl+J** | Yer işaretleri / Geçmiş / İndirmeler |
+| **Ctrl+F** / **Ctrl+P** / **Ctrl+S** | Bul / Yazdır / Farklı kaydet |
+| **Ctrl+U** / **F12** | Sayfa kaynağı / Web denetçisi |
+| **F11** | Tam ekran |
+| **Ctrl+Space** | Hızlı erişim |
 | **Ctrl+Shift+A** | Sekmelere genel bakış |
 | **Ctrl+Shift+Y** | Sayfayı çevir / orijinale dön |
 | **Ctrl+Shift+F** | Odak modu |
 | **Ctrl+Shift+P** | Gizli ↔ normal sekmeler |
+| **Alt+I** | Site bilgileri ve izinler |
+| **F6** / **Shift+F6** | Araç çubuğu, sekmeler ve sayfa arasında gezin |
+| **Ctrl+,** | Ayarlar |
 | **Shift+tık** | Bağlantı önizlemesi |
 
 ---
 
 ## Sık sorulan sorular
 
-**Sqywein neden bu kadar az bellek kullanıyor?**
-Arayüz Rust ile yazıldı ve doğrudan Windows'un çizim altyapısını kullanıyor; Electron gibi kendi içinde ayrı bir tarayıcı taşımıyor. Arka plandaki sekmeler dondurulur, uzun süre kullanılmayanlar bellekten çıkarılır. Reklam engelleyici de reklam betiklerini hiç yüklemeyerek ciddi bellek kazandırır.
+**Neden bu kadar az bellek kullanıyor?**
+Arayüz yerel olarak çiziliyor, içinde ikinci bir tarayıcı taşımıyor. Sayfalar Windows'ta zaten bulunan motorla gösteriliyor. Arka plan sekmeleri dondurulur, reklam betikleri hiç yüklenmez.
 
 **Google hesabımla giriş yapabilir miyim?**
-Evet. Sitelere (Gmail, YouTube vb.) normal şekilde giriş yaparsın ve oturumun açılışlar arasında korunur. Chrome Sync (yer işaretlerini ve şifreleri Google üzerinden eşitleme) şimdilik yok; şifrelerini CSV ile taşıyabilirsin.
+Evet; oturumlar açılışlar arasında korunur. Hesap üzerinden eşitleme (sync) yok; şifreler CSV ile taşınabilir.
 
 **Bir site düzgün çalışmıyor.**
-Önce adres alanındaki kalkana tıklayıp o site için engellemeyi **Kapalı** yap ve sayfayı yenile. Sorun sürüyorsa [Issues](https://github.com/Sqyrix/sqywein/issues) sayfasından bildir.
+Adres alanındaki kalkandan o site için engellemeyi **Kapalı** yapıp yenile. Sürerse [Issues](https://github.com/Sqyrix/sqywein/issues)'a yaz (menü → Yardım → Sorun bildir).
 
-**Netflix, Spotify ya da Disney+ çalışır mı?**
+**Netflix / Spotify çalışır mı?**
 Telif korumalı (DRM) içerik WebView2'nin desteğine bağlı; bazı servisler çalışmayabilir.
 
-**Mac ya da Linux sürümü olacak mı?**
-Hayır. Sqywein bilerek yalnızca Windows için yazıldı; hafifliğini Windows'un kendi bileşenlerini doğrudan kullanmasına borçlu.
+**Mac ya da Linux sürümü?**
+Hayır. Sqywein hafifliğini Windows bileşenlerini doğrudan kullanmasına borçlu.
 
 ---
 
 ## Kaynaktan derleme
 
-### Gerekenler
-- [Rust](https://rustup.rs) (stable, `x86_64-pc-windows-msvc`)
-- Visual Studio 2022 **Derleme Araçları** ("C++ ile masaüstü geliştirme" iş yükü ve Windows SDK)
-- Microsoft Edge WebView2 Runtime
-
-### Derleme ve çalıştırma
+Gerekenler: [Rust](https://rustup.rs) (stable, `x86_64-pc-windows-msvc`), Visual Studio 2022 Derleme Araçları ("C++ ile masaüstü geliştirme"), WebView2 Runtime.
 
 ```powershell
 git clone https://github.com/Sqyrix/sqywein.git
@@ -243,79 +226,61 @@ cargo build --release
 .\target\release\sqywein.exe
 ```
 
-Ya da `calistir.cmd`'ye çift tıkla. Bu betik:
-- derleme dosyalarını proje klasörü yerine `%LOCALAPPDATA%\sqywein-build` içine koyar (OneDrive gibi eşitlenen klasörlerde işe yarar),
-- her derlemede `dist\SqyweinSetup.exe` kurulum dosyasını üretir,
-- geliştirme kopyasını **ayrı bir profille** (`%LOCALAPPDATA%\Sqywein-dev`) açar; böylece kurulu Sqywein'ine dokunmaz.
+`calistir.cmd` derleme çıktısını `%LOCALAPPDATA%\sqywein-build`'e koyar (OneDrive gibi eşitlenen klasörlerde işe yarar), `dist\SqyweinSetup.exe`'yi üretir ve geliştirme kopyasını ayrı bir profille (`%LOCALAPPDATA%\Sqywein-dev`) açar; kurulu Sqywein'e dokunmaz.
 
-### Testler
+### Testleri çalıştırma
 
 ```powershell
 cargo test --locked
 cargo clippy --locked --all-targets -- -D warnings
-```
-
-İç sayfa ve güvenlik testleri Playwright ister (`npm install playwright`):
-
-```powershell
-$env:PLAYWRIGHT_MODULE = "<playwright klasörünün tam yolu>"
-node ui/test-ui.cjs
+$env:PLAYWRIGHT_MODULE = "<playwright-core klasörünün tam yolu>"
+node ui/test-autofill.cjs
 node ui/test-security.cjs
+node ui/test-youtube.cjs
+node ui/test-ui.cjs
+$env:SQYWEIN_TEST_EXE = "<sqywein.exe yolu>"; node scripts/benchmark.cjs
 ```
 
 ### Sürüm yayınlama
 
-`Cargo.toml`'daki sürümü artır, commit'le ve aynı adla bir etiket gönder:
-
-```powershell
-git tag v0.3.0
-git push origin v0.3.0
-```
-
-GitHub Actions ([release.yml](.github/workflows/release.yml)) testleri çalıştırır, derler, `SqyweinSetup.exe`, `sqywein.exe` ve SHA-256 özetini Releases'e yükler. Kullanıcıların Sqywein'i yeni sürümü kendiliğinden bulur.
+`Cargo.toml`'daki sürümü artır, commit'le ve `v` ile başlayan bir etiket gönder (`git tag v0.5.0; git push origin v0.5.0`). [release.yml](.github/workflows/release.yml) testleri çalıştırır, derler ve `SqyweinSetup.exe`, `sqywein.exe` ile SHA-256 özetini Releases'e yükler.
 
 ### Proje yapısı
 
 ```
 src/
-  main.rs          Giriş noktası; kurulum modu, tek pencere kontrolü
-  app.rs, app/     Pencere, sekmeler, araç çubuğu, menüler, sayfalar arası mesajlar
-  engine.rs        WebView2: görünüm oluşturma, betikler, çerezler, indirmeler, uzantılar
-  gfx.rs           Direct2D / DirectWrite çizim katmanı (cam desteğiyle)
-  theme.rs         Renkler, ölçüler, cam katmanları
-  adblock.rs       Reklam engelleyici ve YouTube modülü
-  passwords.rs     DPAPI ile şifrelenen şifre kasası
-  update.rs        GitHub'dan güncelleme ve SHA-256 doğrulaması
-  setup.rs         Kurulum / kaldırma
-  integration.rs   Windows'a tarayıcı olarak kayıt, görev çubuğu kimliği
-ui/                İç sayfalar (Ayarlar, Geçmiş, İndirmeler, Şifreler…), sqywein:// adresinden sunulur
-Assets/            Logo, simge ve maskot
+  main.rs            Giriş noktası; kurulum modu, pencere başlatma
+  app.rs, app/       Pencere, sekmeler, araç çubuğu, menüler (safari_menu.rs), çeviri, kasa, başlangıç sayfası
+  engine.rs          WebView2: görünüm, betikler, çerezler, indirmeler, uzantılar, izinler
+  gfx.rs, theme.rs   Direct2D/DirectWrite çizimi, cam, renkler
+  adblock.rs         Reklam engelleyici ve YouTube modülü
+  passwords.rs       DPAPI ile şifrelenen şifre kasası
+  storage.rs         Atomik, şifreli kayıt ve süreçler arası kilit
+  windows_session.rs Çoklu pencere oturumları
+  update.rs, setup.rs  Güncelleme (SHA-256) ve kurulum
+ui/                  İç sayfalar (sqywein://), otomatik doldurma betiği ve testler
 ```
 
-Ek belgeler: [PLAN.md](PLAN.md) (yol haritası), [PERFORMANCE.md](PERFORMANCE.md) (ölçümler), [QA.md](QA.md) (davranışlar ve doğrulama), [INTEGRATION.md](INTEGRATION.md) (Windows bütünleşmesi).
+Ek belgeler: [PERFORMANCE.md](PERFORMANCE.md), [QA.md](QA.md), [INTEGRATION.md](INTEGRATION.md), [UTILITIES.md](UTILITIES.md), [PLAN.md](PLAN.md).
 
 ---
 
 ## Yol haritası
 
-- [x] Rust'a tam geçiş, hafif arayüz
+- [x] Rust'a tam geçiş, yerel arayüz
 - [x] YouTube'da da çalışan reklam engelleyici
 - [x] Windows Hello korumalı şifre kasası
 - [x] Otomatik güncelleme ve kurulum dosyası
-- [x] Safari tarzı cam efektli tasarım
+- [x] Cam efektli tasarım, sayfa çevirisi
+- [x] Okuyucu, Okuma Listesi, çoklu pencere
 - [ ] Dijital imza (SmartScreen uyarısı olmadan kurulum)
-- [ ] Sayfa çevirisi
 - [ ] Dikey sekmeler, bölünmüş görünüm
-- [ ] Okuma modu
 - [ ] Cihazlar arası eşitleme
 
 ---
 
 ## Teşekkürler
 
-- [Microsoft WebView2](https://developer.microsoft.com/microsoft-edge/webview2/) — sayfa motoru
-- [windows-rs](https://github.com/microsoft/windows-rs) ve [webview2-com](https://github.com/wravery/webview2-rs) — Windows API bağlamaları
-- [adblock-rust](https://github.com/brave/adblock-rust) (Brave) — reklam engelleme motoru
-- [uBlock Origin](https://github.com/uBlockOrigin/uAssets) ve [EasyList](https://easylist.to) filtre listeleri
+[WebView2](https://developer.microsoft.com/microsoft-edge/webview2/) · [windows-rs](https://github.com/microsoft/windows-rs) · [webview2-com](https://github.com/wravery/webview2-rs) · [adblock-rust](https://github.com/brave/adblock-rust) · [uBlock Origin filtreleri](https://github.com/uBlockOrigin/uAssets) · [EasyList](https://easylist.to) · [AdGuard Türkçe filtresi](https://github.com/AdguardTeam/AdguardFilters)
 
-Hata bildirimi ve öneriler için: [Issues](https://github.com/Sqyrix/sqywein/issues).
+Lisans: [MIT](LICENSE). Hata bildirimi ve öneriler: [Issues](https://github.com/Sqyrix/sqywein/issues).

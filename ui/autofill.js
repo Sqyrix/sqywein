@@ -79,7 +79,21 @@
     const passwords = deepInputs('input[type="password"]').filter(visible);
     // Şifre türündeki bir alan aslında kimlik alanıysa (ör. maskeli T.C.) yine tek adım sayılmaz.
     if (passwords.some(p => !ID_HINT.test(describeField(p)))) return [];
-    return deepInputs('input').filter(input => visible(input) && TEXTY.includes(input.type) && identityScore(input) >= 2);
+    return deepInputs('input').filter(input => visible(input) && TEXTY.includes(input.type) && identityScore(input) >= 2 && loginContext(input));
+  }
+  // Tek başına duran e-posta alanı her zaman giriş değildir (bülten, iletişim, ödeme formu).
+  // Site "username" demişse ya da çevresi açıkça bir giriş ekranıysa kabul edilir.
+  const LOGIN = /log.?in|sign.?in|signin|giri[şs]|oturum|auth|hesab[ıi]n|account|idmsa|apple.?id|kimlik do[ğg]rula/i;
+  const NOT_LOGIN = /newsletter|b[üu]lten|subscribe|abone ol|kaydol|sign.?up|register|[üu]ye ol|checkout|[öo]deme|ileti[şs]im|contact/i;
+  function loginContext(input) {
+    if (/(?:^|\s)(username|webauthn)(?:\s|$)/i.test(input.autocomplete || '')) return true;
+    const box = input.form || input.closest('section,article,[role="form"],dialog,main') || input.getRootNode();
+    if (box.querySelector?.('textarea,select')) return false;
+    const texts = [...(box.querySelectorAll?.('input') || [])].filter(i => visible(i) && TEXTY.includes(i.type));
+    if (texts.length > 2) return false;
+    const around = (box.textContent || '').slice(0, 800) + ' ' + [...(box.querySelectorAll?.('button,input[type="submit"]') || [])].map(b => b.textContent + ' ' + (b.value || '')).join(' ');
+    if (NOT_LOGIN.test(around)) return false;
+    return LOGIN.test(around + ' ' + document.title + ' ' + location.pathname + ' ' + location.hostname);
   }
   function close() {
     popup?.remove(); popup = null; options = [];
@@ -250,7 +264,7 @@
   const observer = new MutationObserver(mutations => {
     const relevant = mutations.some(m => m.type === 'attributes'
       ? (m.target instanceof HTMLInputElement || (m.target instanceof Element && !!m.target.querySelector('input[type="password"]')))
-      : [...m.addedNodes].some(n => n.nodeType === 1 && (n.matches('input') || n.querySelector('input'))));
+      : [...m.addedNodes].some(n => n.nodeType === 1 && (n.matches('input') || n.localName.includes('-') || !!n.shadowRoot || !!n.querySelector('input'))));
     if (active && !active.password?.isConnected && !active.username?.isConnected) { close(); active = null; }
     if (relevant && !timer) timer = setTimeout(() => { timer = null; scan(); },180);
   });
@@ -261,4 +275,9 @@
     if (el instanceof HTMLInputElement && !fields.has(el) && !usernames.has(el)) setTimeout(scan, 0);
   }, true);
   scan();
+  // Web bileşenleri gölge kökünü sonradan kurar: sayfa hazır olunca bir kez daha bakılır.
+  if (document.readyState !== 'complete') {
+    document.addEventListener('DOMContentLoaded', () => setTimeout(scan, 0), {once:true});
+    window.addEventListener('load', () => setTimeout(scan, 300), {once:true});
+  }
 })();

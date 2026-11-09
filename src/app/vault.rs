@@ -29,6 +29,7 @@ pub(super) struct PendingLogin {
     pub password: String,
     pub update: bool,
 }
+impl Drop for PendingLogin{fn drop(&mut self){use zeroize::Zeroize;self.password.zeroize();}}
 
 impl App {
     fn reply(&self, tab_id: u32, msg: Value) {
@@ -39,13 +40,21 @@ impl App {
 
     fn save_vault(&mut self) {
         let profile = self.state.current_profile.clone();
-        let _ = self.vault.save(&profile);
+        if self.vault.save(&profile).is_err(){
+            let message=json!({"type":"passwords.error","message":"Şifre kasası kaydedilemedi. Eski dosyanın üzerine yazılmadı; disk alanını ve dosya erişimini kontrol edin."}).to_string();
+            for tab in &self.tabs {if url::is_internal(&tab.url){if let Some(v)=&tab.view{engine::post_json(v,&message);}}}
+        }
     }
 
     // ---------- Sayfalardaki giriş formları ----------
 
     pub(super) fn on_password_message(&mut self, tab_id: u32, frame: Option<ICoreWebView2Frame>, source: &str, json: &str) {
         let Ok(msg) = serde_json::from_str::<Value>(json) else { return };
+        if matches!(msg["type"].as_str(),Some("pw.query"|"pw.submitted")){
+            let Ok(_guard)=crate::storage::RecordLock::acquire(&crate::passwords::path(&self.state.current_profile)) else{return};
+            self.vault=crate::passwords::Vault::load(&self.state.current_profile);
+        }
+        if matches!(msg["type"].as_str(),Some("pw.fill"|"pw.submitted"|"pw.manage")) && self.tabs.get(self.active).is_none_or(|t|t.id!=tab_id){return;}
         crate::log::line(&format!("ŞİFRE #{tab_id} {} {} {}", msg["type"].as_str().unwrap_or("?"), if frame.is_some() { "çerçeve" } else { "sayfa" }, url::host(source)));
         // Yanıt, mesajı gönderen çerçeveye (iframe) ya da sayfaya gider.
         let send = |app: &App, msg: Value| match &frame {
@@ -106,6 +115,8 @@ impl App {
     }
 
     pub(super) fn save_pending_login(&mut self, never: bool) {
+        let Ok(_guard)=crate::storage::RecordLock::acquire(&crate::passwords::path(&self.state.current_profile)) else{return};
+        self.vault=crate::passwords::Vault::load(&self.state.current_profile);
         let Some(p) = self.pending_login.take() else { return };
         if never {
             self.vault.set_never(&p.url);
@@ -154,6 +165,9 @@ impl App {
 
     /// İç sayfadan gelen `passwords.*` mesajları. Yanıt varsa döner.
     pub(super) fn on_passwords_page(&mut self, tab_id: u32, kind: &str, msg: &Value) -> Option<Value> {
+        let Ok(_guard)=crate::storage::RecordLock::acquire(&crate::passwords::path(&self.state.current_profile)) else{return Some(json!({"type":"passwords.error","message":"Şifre kasası başka pencerede meşgul. Yeniden deneyin."}))};
+        self.vault=crate::passwords::Vault::load(&self.state.current_profile);
+        if !self.vault.available(){return Some(json!({"type":"passwords.error","message":"Şifre kasası veya yedeği doğrulanamadı. Verilerin korunması için üzerine yazılmıyor."}));}
         let s = |k: &str| msg[k].as_str().unwrap_or("").to_string();
         match kind {
             "passwords.list" => Some(self.passwords_json(&s("query"))),
@@ -193,7 +207,9 @@ impl App {
     // ---------- Windows Hello kapısı ----------
 
     fn gate(&mut self, tab_id: u32, action: Gate) {
-        if self.hello_until.is_some_and(|t| Instant::now() < t) {
+        let cross_origin=match &action{Gate::Fill(_,source,id,_)=>self.vault.get(*id).is_some_and(|c|Some(c.origin.as_str())!=crate::passwords::origin(source).as_deref()),_=>false};
+        if cross_origin && !self.hello_pending.is_empty(){return;}
+        if !cross_origin && self.hello_until.is_some_and(|t| Instant::now() < t) {
             self.fulfil(tab_id, action);
             return;
         }
@@ -201,16 +217,19 @@ impl App {
         self.hello_pending.push((tab_id, action));
         if first {
             self.hello_request += 1;
-            let message = if matches!(self.hello_pending[0].1, Gate::Fill(..)) {
-                "Kayıtlı şifreyi doldurmak için kimliğini doğrula."
+            let message = if let Gate::Fill(_,source,_,_)=&self.hello_pending[0].1 {
+                format!("{} sitesine şifre doldurmak için kimliğini doğrula.",crate::passwords::origin(source).unwrap_or_default())
             } else {
-                "Kayıtlı şifrelere erişmek için kimliğini doğrula."
+                "Kayıtlı şifrelere erişmek için kimliğini doğrula.".into()
             };
-            hello::verify(self.hwnd, message, self.hello_request);
+            hello::verify(self.hwnd, &message, self.hello_request);
         }
     }
 
     fn fulfil(&mut self, tab_id: u32, action: Gate) {
+        let Ok(_guard)=crate::storage::RecordLock::acquire(&crate::passwords::path(&self.state.current_profile)) else{return};
+        self.vault=crate::passwords::Vault::load(&self.state.current_profile);
+        if matches!(&action,Gate::Fill(..)) && self.tabs.get(self.active).is_none_or(|t|t.id!=tab_id){return;}
         let Some(tab) = self.index_of(tab_id).map(|i| &self.tabs[i]) else { return };
         // Never send secrets to a document which navigated while Hello was open.
         let Some(view) = tab.view.as_ref() else { return };

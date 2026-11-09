@@ -206,7 +206,7 @@ impl App {
         self.hello_until = None;
         for t in self.state.sessions.remove(&target).unwrap_or_default() {
             self.push_tab(t.url, t.title);
-            if let Some(tab) = self.tabs.last_mut() { tab.pinned = t.pinned; }
+            if let Some(tab) = self.tabs.last_mut() { tab.pinned = t.pinned; tab.scroll=t.scroll;tab.restore_scroll=true; }
         }
         if self.tabs.is_empty() {
             self.push_tab(String::new(), String::new());

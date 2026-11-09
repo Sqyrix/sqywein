@@ -8,6 +8,7 @@ const SQYWEIN: Palette = Palette {base:0x14121C,raised:0x211D2E,hover:0x2E2940,l
 const DARK: Palette = Palette {base:0x1C1C1E,raised:0x2C2C2E,hover:0x3A3A3C,line:0x48484A,ink:0xF5F5F7,muted:0xAEAEB2,faint:0x98989D,field:0x3A3A3C,danger:0xFF6961};
 const LIGHT: Palette = Palette {base:0xF5F5F7,raised:0xFFFFFF,hover:0xE5E5EA,line:0xD1D1D6,ink:0x1D1D1F,muted:0x515154,faint:0x6E6E73,field:0xE8E8ED,danger:0xB42318};
 thread_local! {
+    static HIGH_CONTRAST: std::cell::Cell<bool> = const {std::cell::Cell::new(false)};
     static PALETTE: std::cell::Cell<Palette> = const {std::cell::Cell::new(SQYWEIN)};
     static THEME: std::cell::Cell<&'static str> = const {std::cell::Cell::new("sqywein")};
 }
@@ -21,7 +22,16 @@ pub fn muted() -> Rgb {palette().muted}
 pub fn faint() -> Rgb {palette().faint}
 pub fn search() -> Rgb {palette().field}
 pub fn danger() -> Rgb {palette().danger}
-pub fn is_dark() -> bool {palette()!=LIGHT}
+pub fn is_dark() -> bool {let c=base(); ((c>>16)&255)*299+((c>>8)&255)*587+(c&255)*114 < 128000}
+pub fn high_contrast()->bool {HIGH_CONTRAST.with(|h|h.get())}
+fn contrast_palette()->Option<Palette>{
+    use windows::Win32::{UI::{Accessibility::{HIGHCONTRASTW,HCF_HIGHCONTRASTON},WindowsAndMessaging::*},Graphics::Gdi::*};
+    let mut hc=HIGHCONTRASTW{cbSize:std::mem::size_of::<HIGHCONTRASTW>() as u32,..Default::default()};
+    if unsafe{SystemParametersInfoW(SPI_GETHIGHCONTRAST,hc.cbSize,Some(&mut hc as *mut _ as _),SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0))}.is_err() || (hc.dwFlags & HCF_HIGHCONTRASTON).0==0 {return None}
+    let color=|index|{let c=unsafe{GetSysColor(index)};colorref(c)};
+    let bg=color(COLOR_WINDOW);let fg=color(COLOR_WINDOWTEXT);
+    Some(Palette{base:bg,raised:bg,hover:color(COLOR_BTNFACE),line:fg,ink:fg,muted:fg,faint:color(COLOR_GRAYTEXT),field:bg,danger:fg})
+}
 pub fn system_is_light() -> bool {
     use windows::{core::*,Win32::System::Registry::*};
     let mut value=1u32;let mut size=4u32;
@@ -33,7 +43,8 @@ fn resolve(name:&str, system_light:bool) -> Palette {
 }
 pub fn set_theme(name: &str) -> bool {
     let name=match name {"light"=>"light","dark"=>"dark","system"=>"system",_=>"sqywein"};
-    let palette=resolve(name,name=="system"&&system_is_light());
+    let hc=contrast_palette();HIGH_CONTRAST.with(|h|h.set(hc.is_some()));
+    let palette=hc.unwrap_or_else(||resolve(name,name=="system"&&system_is_light()));
     THEME.with(|t|t.replace(name)!=name)|PALETTE.with(|p|p.replace(palette)!=palette)
 }
 pub fn message() -> serde_json::Value {

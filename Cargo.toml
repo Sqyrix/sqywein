@@ -1,6 +1,6 @@
 [package]
 name = "sqywein"
-version = "0.4.3"
+version = "0.5.0"
 edition = "2021"
 description = "Sqywein: hafif ve kendine has bir tarayıcı"
 build = "build.rs"
@@ -10,13 +10,15 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 webview2-com = "0.39.1"
 windows-numerics = "0.3.1"
-windows = { version = "0.62.2", features = ["Win32_Foundation", "Devices_Geolocation", "Win32_Globalization", "Media_Ocr", "Graphics_Imaging", "Storage_Streams", "Globalization", "Win32_Media", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_System_Ole", "ApplicationModel_DataTransfer", "Win32_Networking_WinHttp", "Win32_Graphics_Direct2D", "Win32_Graphics_Direct2D_Common", "Win32_Graphics_DirectWrite", "Win32_Graphics_Dxgi_Common", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm", "Win32_System_Com", "Win32_System_LibraryLoader", "Win32_System_ProcessStatus", "Win32_System_SystemInformation", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_HiDpi", "Win32_UI_Controls", "Win32_Graphics_Imaging", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_Shell_PropertiesSystem", "Win32_System_Com_Urlmon", "Win32_System_Com_StructuredStorage", "Win32_Storage_FileSystem", "Win32_Security_Cryptography", "Security_Credentials_UI", "Foundation", "Win32_System_WinRT"] }
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_System_Power", "Win32_System_Variant", "Win32_UI_Accessibility", "Devices_Geolocation", "Win32_Globalization", "Media_Ocr", "Graphics_Imaging", "Storage_Streams", "Globalization", "Win32_Media", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_System_Ole", "ApplicationModel_DataTransfer", "Win32_Networking_WinHttp", "Win32_Graphics_Direct2D", "Win32_Graphics_Direct2D_Common", "Win32_Graphics_DirectWrite", "Win32_Graphics_Dxgi_Common", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm", "Win32_System_Com", "Win32_System_LibraryLoader", "Win32_System_ProcessStatus", "Win32_System_SystemInformation", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_HiDpi", "Win32_UI_Controls", "Win32_Graphics_Imaging", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_Shell_PropertiesSystem", "Win32_System_Com_Urlmon", "Win32_System_Com_StructuredStorage", "Win32_Storage_FileSystem", "Win32_Security_Cryptography", "Security_Credentials_UI", "Foundation", "Win32_System_WinRT"] }
 zip = { version = "9.4.1", default-features = false, features = ["deflate"] }
 adblock = { version = "0.13.5", default-features = false, features = ["embedded-domain-resolver", "full-regex-handling"] }
 windows-future = "0.3.2"
 psl = "2.1.248"
 sha2 = "0.11.1"
 qrcodegen = "1.8"
+zeroize = "1.8"
+windows-core = "0.62.2"
 
 [build-dependencies]
 embed-resource = "3"

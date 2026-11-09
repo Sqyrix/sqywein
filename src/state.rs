@@ -3,11 +3,13 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use std::{collections::BTreeMap, fs, io, path::PathBuf};
+use std::{collections::BTreeMap, io, path::PathBuf};
 
 #[derive(Serialize, Deserialize, Default, Clone)]
 #[serde(rename_all = "PascalCase")]
 pub struct SavedTab {
+    #[serde(default)]
+    pub scroll: [f64; 2],
     #[serde(default)]
     pub pinned: bool,
     #[serde(default)]
@@ -160,6 +162,12 @@ pub struct DownloadRecord {
 #[derive(Serialize, Deserialize, Default)]
 #[serde(rename_all = "PascalCase")]
 pub struct AppState {
+    #[serde(skip)]
+    pub baseline: Map<String,Value>,
+    #[serde(skip)]
+    pub storage_error: Option<String>,
+    #[serde(default)]
+    pub session_clean: bool,
     #[serde(default)]
     pub default_prompt_seen: bool,
     #[serde(default)]
@@ -170,6 +178,9 @@ pub struct AppState {
     pub active_index: i32,
     #[serde(default)]
     pub favorites: Vec<Bookmark>,
+    /// Okuma Listesi: daha sonra okunacak sayfalar.
+    #[serde(default)]
+    pub reading_list: Vec<Bookmark>,
     /// Ana sayfadaki kısayol kutucukları.
     #[serde(default)]
     pub shortcuts: Vec<Bookmark>,
@@ -228,9 +239,14 @@ fn public_downloads<S: serde::Serializer>(items: &[DownloadRecord], serializer: 
 
 pub const DEFAULT_PROFILE: &str = "default";
 
+pub fn valid_profile(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 64 && id.bytes().all(|c| c.is_ascii_alphanumeric() || c==b'-' || c==b'_')
+}
+
 impl AppState {
     /// Profil listesi boşsa varsayılan profili ekler.
     pub fn ensure_profiles(&mut self) {
+        self.profiles.retain(|p| valid_profile(&p.id));
         if self.profiles.is_empty() {
             self.profiles.push(Profile { id: DEFAULT_PROFILE.into(), name: "Kişisel".into(), color: "#AF85FC".into(), ..Default::default() });
         }
@@ -271,29 +287,64 @@ fn state_path() -> PathBuf {
 }
 
 pub fn load() -> AppState {
-    let mut state: AppState = fs::read(state_path())
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(strip_bom(&bytes)).ok())
-        .unwrap_or_default(); // İlk açılış ya da bozuk dosya: sıfırdan başlanır.
+    let mut state: AppState = match crate::storage::read_json(&state_path()) {
+        Ok(value) => value,
+        Err(e) if e.kind()==io::ErrorKind::NotFound => AppState::default(),
+        Err(e) => AppState { storage_error: Some(e.to_string()), ..Default::default() },
+    };
     state.ensure_profiles();
+    state.baseline=serde_json::to_value(&state).ok().and_then(|v|v.as_object().cloned()).unwrap_or_default();
+    crate::windows_session::restore(&mut state);
     state
 }
 
-pub fn save(state: &AppState) -> io::Result<()> {
-    let dir = root();
-    fs::create_dir_all(&dir)?;
-    let path = state_path();
-    let temp = path.with_extension("json.tmp");
-    fs::write(&temp, serde_json::to_vec(state)?)?;
-    fs::rename(temp, path)
+pub fn save(state: &mut AppState) -> io::Result<()> {
+    if state.storage_error.is_some() { return Err(io::Error::other("Okunamayan oturumun üzerine yazılmadı")); }
+    let _lock=crate::storage::RecordLock::acquire(&state_path())?;
+    let ours=serde_json::to_value(&state)?;
+    let mut latest:Value=match crate::storage::read_json(&state_path()){Ok(v)=>v,Err(e) if e.kind()==io::ErrorKind::NotFound=>Value::Object(Map::new()),Err(e)=>return Err(e)};
+    let object=latest.as_object_mut().ok_or_else(||io::Error::other("Oturum biçimi geçersiz"))?;
+    for (key,value) in ours.as_object().unwrap(){
+        if crate::windows_session::secondary() && (crate::windows_session::private() || crate::integration::other_normal_windows()) && ["Tabs","ActiveIndex","Window","CurrentProfile","SessionClean"].contains(&key.as_str()){continue}
+        let before=state.baseline.get(key).unwrap_or(&Value::Null);
+        if before!=value || !object.contains_key(key) {object.insert(key.clone(),merge_value(before,value,object.get(key).unwrap_or(&Value::Null)));}
+    }
+    crate::windows_session::checkpoint(state)?;
+    crate::storage::write_json(&state_path(),&latest)?;
+    let mut current=latest;
+    for key in ["Tabs","ActiveIndex","Window","CurrentProfile","SessionClean"]{current[key]=ours[key].clone();}
+    let baseline=current.as_object().unwrap().clone();
+    *state=serde_json::from_value(current)?;state.ensure_profiles();state.baseline=baseline;
+    Ok(())
 }
 
-fn strip_bom(bytes: &[u8]) -> &[u8] {
-    bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes)
+fn merge_value(base:&Value,ours:&Value,theirs:&Value)->Value{
+    if ours==base{return theirs.clone()}
+    if theirs==base||ours==theirs{return ours.clone()}
+    if let (Some(b),Some(o),Some(t))=(base.as_object(),ours.as_object(),theirs.as_object()){
+        let mut merged=t.clone();for key in b.keys().chain(o.keys()){
+            let old=b.get(key).unwrap_or(&Value::Null);let new=o.get(key).unwrap_or(&Value::Null);
+            if new!=old{if let Some(new)=o.get(key){merged.insert(key.clone(),merge_value(old,new,t.get(key).unwrap_or(&Value::Null)));}else{merged.remove(key);}}
+        }return Value::Object(merged)
+    }
+    if let (Some(b),Some(o),Some(t))=(base.as_array(),ours.as_array(),theirs.as_array()){
+        let key=|v:&Value|v.get("Id").or_else(||v.get("Url")).or_else(||v.get("id")).filter(|v|v.is_string()).cloned();
+        if b.iter().chain(o).chain(t).all(|v|key(v).is_some()){
+            let mut merged=t.clone();
+            for old in b{let id=key(old);if !o.iter().any(|v|key(v)==id){merged.retain(|v|key(v)!=id);}}
+            for new in o{let id=key(new);let old=b.iter().find(|v|key(v)==id);if old!=Some(new){if let Some(at)=merged.iter().position(|v|key(v)==id){merged[at]=merge_value(old.unwrap_or(&Value::Null),new,&merged[at]);}else{merged.push(new.clone());}}}
+            return Value::Array(merged)
+        }
+    }ours.clone()
 }
 
 #[cfg(test)]
 mod tests {
+    #[test] fn profile_ids_cannot_escape_the_data_directory(){
+        for id in ["../other","a/b","a\\b","", ".", "C:other"]{assert!(!valid_profile(id));}
+        let mut s=AppState{profiles:vec![Profile{id:"../../outside".into(),..Default::default()}],current_profile:"../../outside".into(),..Default::default()};
+        s.ensure_profiles();assert_eq!(s.current_profile,DEFAULT_PROFILE);assert!(valid_profile(&s.profile().id));
+    }
     use super::*;
 
     #[test]

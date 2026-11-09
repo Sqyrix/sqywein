@@ -233,6 +233,7 @@ impl App {
             Hit::NewTab => "Yeni sekme (Ctrl+T)".into(),
             Hit::Star => if self.is_bookmarked(&tab.url) { "Yer işaretini kaldır".into() } else { "Yer işaretlerine ekle (Ctrl+D)".into() },
             Hit::Shield => "Reklam engelleyici".into(),
+            Hit::SiteInfo=>"Site bilgileri ve izinleri (Alt+I)".into(),
             Hit::Update => format!("Sqywein v{} hazır: yeniden başlatıp kurmak için tıkla", self.update_ready.as_ref()?.0),
             Hit::ZoomPill => "Yakınlaştırmayı sıfırla".into(),
             Hit::AddExtension => "Bu uzantıyı Sqywein'e ekle".into(),
@@ -276,10 +277,11 @@ impl App {
         })
     }
 
-    fn hit_rect(&self, hit: Hit) -> Option<Rect> {
+    pub(super) fn hit_rect(&self, hit: Hit) -> Option<Rect> {
         let l = self.layout();
         Some(match hit {
             Hit::Back => l.back,
+            Hit::SiteInfo=>Rect::new(l.address.x+6.0,l.address.y,28.0,l.address.h),
             Hit::Forward => l.forward,
             Hit::Reload => l.reload,
             Hit::NewTab => l.new_tab,

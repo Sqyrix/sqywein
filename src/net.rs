@@ -63,10 +63,18 @@ fn blob(data: &[u8]) -> CRYPT_INTEGER_BLOB {
 }
 
 /// Windows kullanıcı hesabına bağlı şifreleme (DPAPI): yalnızca bu kullanıcı çözebilir.
+#[cfg(test)]
 pub fn protect(data: &[u8]) -> Option<Vec<u8>> {
+    protect_impl(data, None)
+}
+
+pub fn protect_scoped(data: &[u8], context: &[u8]) -> Option<Vec<u8>> { protect_impl(data, Some(context)) }
+
+fn protect_impl(data: &[u8], context: Option<&[u8]>) -> Option<Vec<u8>> {
     unsafe {
         let mut out = CRYPT_INTEGER_BLOB::default();
-        CryptProtectData(&blob(data), w!("Sqywein"), None, None, None, 0, &mut out).ok()?;
+        let entropy = context.map(blob);
+        CryptProtectData(&blob(data), w!("Sqywein"), entropy.as_ref().map(|b| b as *const _), None, None, 1, &mut out).ok()?;
         let bytes = std::slice::from_raw_parts(out.pbData, out.cbData as usize).to_vec();
         let _ = LocalFree(Some(HLOCAL(out.pbData as _)));
         Some(bytes)
@@ -74,10 +82,19 @@ pub fn protect(data: &[u8]) -> Option<Vec<u8>> {
 }
 
 pub fn unprotect(data: &[u8]) -> Option<Vec<u8>> {
+    unprotect_impl(data, None)
+}
+
+pub fn unprotect_scoped(data: &[u8], context: &[u8]) -> Option<Vec<u8>> { unprotect_impl(data, Some(context)) }
+
+fn unprotect_impl(data: &[u8], context: Option<&[u8]>) -> Option<Vec<u8>> {
     unsafe {
         let mut out = CRYPT_INTEGER_BLOB::default();
-        CryptUnprotectData(&blob(data), None, None, None, None, 0, &mut out).ok()?;
+        let entropy = context.map(blob);
+        CryptUnprotectData(&blob(data), None, entropy.as_ref().map(|b| b as *const _), None, None, 1, &mut out).ok()?;
         let bytes = std::slice::from_raw_parts(out.pbData, out.cbData as usize).to_vec();
+        use zeroize::Zeroize;
+        std::slice::from_raw_parts_mut(out.pbData, out.cbData as usize).zeroize();
         let _ = LocalFree(Some(HLOCAL(out.pbData as _)));
         Some(bytes)
     }

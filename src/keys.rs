@@ -1,5 +1,6 @@
 //! Klavye kısayolları. Hem pencere hem sayfa odaktayken aynı tablo kullanılır.
 
+use crate::menu::MenuCmd;
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL, VK_MENU, VK_SHIFT};
 
 #[derive(Clone, Copy, Default, PartialEq, Debug)]
@@ -25,6 +26,8 @@ pub enum Cmd {
     CloseTab,
     ReopenTab,
     FocusAddress,
+    SiteInfo,
+    CycleChrome(bool),
     NextTab,
     PrevTab,
     GoToTab(usize),
@@ -37,7 +40,8 @@ pub enum Cmd {
     History,
     Downloads,
     Bookmarks,
-    PrivateTab,
+    /// Safari menülerindeki komutlar (yeni pencere, okuyucu, tam ekran…).
+    Menu(MenuCmd),
     /// Adres çubuğunda: yazılanı aç.
     Go,
     /// Adres çubuğunda: değişikliği geri al, sayfaya dön.
@@ -51,7 +55,9 @@ const VK_LEFT: u32 = 0x25;
 const VK_RIGHT: u32 = 0x27;
 const VK_F4: u32 = 0x73;
 const VK_F5: u32 = 0x74;
+const VK_F11: u32 = 0x7A;
 const VK_F12: u32 = 0x7B;
+const VK_COMMA: u32 = 0xBC;
 
 /// `in_address`: tuş adres çubuğuna mı geldi?
 pub fn command(vk: u32, m: Mods, in_address: bool) -> Option<Cmd> {
@@ -65,7 +71,15 @@ pub fn command(vk: u32, m: Mods, in_address: bool) -> Option<Cmd> {
         (true, true, false, Some('Y'), _) => Cmd::Translate,
         (true, true, false, Some('F'), _) => Cmd::Focus,
         (true, true, false, Some('P'), _) => Cmd::SwitchMode,
-        (true, true, false, Some('N'), _) => Cmd::PrivateTab,
+        (true, true, false, Some('N'), _) => Cmd::Menu(MenuCmd::PrivateWindow),
+        (true, false, false, Some('N'), _) => Cmd::Menu(MenuCmd::NewWindow),
+        (true, true, false, Some('R'), _) => Cmd::Menu(MenuCmd::Reader),
+        (true, true, false, Some('D'), _) => Cmd::Menu(MenuCmd::AddReading),
+        (true, false, false, Some('S'), _) => Cmd::Menu(MenuCmd::SavePage),
+        (true, false, false, Some('U'), _) => Cmd::Menu(MenuCmd::ViewSource),
+        (true, false, false, Some('P'), _) => Cmd::Menu(MenuCmd::Print),
+        (true, false, false, _, VK_COMMA) => Cmd::Menu(MenuCmd::Settings),
+        (false, false, false, _, VK_F11) => Cmd::Menu(MenuCmd::FullScreen),
         (true, true, false, Some('O'), _) => Cmd::Bookmarks,
         (true, false, false, Some('D'), _) => Cmd::Bookmark,
         (true, false, false, Some('H'), _) => Cmd::History,
@@ -73,6 +87,8 @@ pub fn command(vk: u32, m: Mods, in_address: bool) -> Option<Cmd> {
         (true, false, false, Some('T'), _) => Cmd::NewTab,
         (true, false, false, Some('W'), _) | (true, false, false, _, VK_F4) => Cmd::CloseTab,
         (true, false, false, Some('L' | 'K' | 'E'), _) | (false, false, true, Some('D'), _) => Cmd::FocusAddress,
+        (false, false, true, Some('I'), _) => Cmd::SiteInfo,
+        (false, shift, false, _, 0x75) => Cmd::CycleChrome(shift),
         (true, false, false, _, VK_TAB) => Cmd::NextTab,
         (true, true, false, _, VK_TAB) => Cmd::PrevTab,
         (true, false, false, Some('9'), _) => Cmd::LastTab,
@@ -103,6 +119,9 @@ mod tests {
         assert_eq!(command(VK_RETURN, NONE, false), None);
         assert_eq!(command('A' as u32, NONE, false), None);
         assert_eq!(command('D' as u32, CTRL, false), Some(Cmd::Bookmark));
-        assert_eq!(command('N' as u32, CTRL_SHIFT, false), Some(Cmd::PrivateTab));
+        assert_eq!(command('N' as u32, CTRL_SHIFT, false), Some(Cmd::Menu(MenuCmd::PrivateWindow)));
+        assert_eq!(command('N' as u32, CTRL, false), Some(Cmd::Menu(MenuCmd::NewWindow)));
+        assert_eq!(command(VK_F11, NONE, false), Some(Cmd::Menu(MenuCmd::FullScreen)));
+        assert_eq!(command('R' as u32, CTRL, false), Some(Cmd::Reload));
     }
 }

@@ -48,6 +48,16 @@ pub fn format_mb(bytes: u64) -> String {
     format!("{} MB", (bytes + 512 * 1024) / (1024 * 1024))
 }
 
+pub fn energy_saver() -> bool {
+    use windows::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
+    let mut status=SYSTEM_POWER_STATUS::default();
+    unsafe { GetSystemPowerStatus(&mut status) }.is_ok() && (status.ACLineStatus==0 || status.SystemStatusFlag!=0)
+}
+
+pub fn housekeeping_interval(battery:bool,active:bool,minimized:bool)->u32 {
+    if minimized{15000}else if battery || !active{10000}else{5000}
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Pressure { #[default] Normal, Elevated, Critical }
 
@@ -83,6 +93,12 @@ impl Pressure {
 
 #[cfg(test)]
 mod tests {
+    #[test] fn background_and_battery_reduce_wakeups(){
+        assert_eq!(super::housekeeping_interval(false,true,false),5000);
+        assert_eq!(super::housekeeping_interval(true,true,false),10000);
+        assert_eq!(super::housekeeping_interval(false,false,false),10000);
+        assert_eq!(super::housekeeping_interval(true,false,true),15000);
+    }
     #[test]
     fn pressure_recovers_without_thrashing_and_handles_commit_exhaustion() {
         use super::Pressure::*;

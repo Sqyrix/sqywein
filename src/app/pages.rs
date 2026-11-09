@@ -284,6 +284,8 @@ impl App {
             "defaultBrowser": crate::integration::is_default_browser(),
             "translationLanguages": super::translate::LANGUAGES,
             "systemLanguage": super::translate::system_language(),
+            "recoveredSession":self.recovered_session,
+            "energySaver":self.energy_saver,
             "motion": motion_enabled(),
             "profiles": self.profiles_json(),
             "about": { "version": env!("CARGO_PKG_VERSION"), "engine": format!("WebView2 {engine}") },

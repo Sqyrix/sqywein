@@ -4,10 +4,11 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::{
-    fs, io,
+    io,
     path::Path,
     time::{SystemTime, UNIX_EPOCH},
 };
+#[cfg(test)] use std::fs;
 
 pub const MAX_ENTRIES: usize = 5000;
 const SECOND: i128 = 1_000_000_000;
@@ -73,7 +74,12 @@ pub struct History {
     // Eşit puanlarda yükleme sırası korunur; adres karşılaştırması birebirdir.
     entries: Vec<HistoryEntry>,
     dirty: bool,
+    locked: bool,
+    forget_backup: bool,
+    loaded: bool,
+    pending: Vec<Change>,
 }
+enum Change{Visit(String,String,String),Title(String,String),Remove(String),Clear}
 
 impl History {
     pub fn new(entries: impl IntoIterator<Item = HistoryEntry>) -> Self {
@@ -96,11 +102,11 @@ impl History {
     pub fn save_profile(&mut self, profile: &str) -> io::Result<()> { self.save_to(&Self::profile_path(profile)) }
 
     fn load_from(path: &Path) -> Self {
-        let entries: Vec<HistoryEntry> = fs::read(path).ok()
-            .and_then(|bytes| serde_json::from_slice(
-                bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(&bytes)
-            ).ok()).unwrap_or_default();
-        Self::new(entries)
+        match crate::storage::read_json::<Vec<HistoryEntry>>(path) {
+            Ok(entries) => {let mut history=Self::new(entries);history.loaded=true;if !crate::storage::is_sealed(path) {history.dirty=crate::storage::write_json(path,&history.entries).is_err();}history},
+            Err(e) if e.kind()==io::ErrorKind::NotFound => Self{loaded:true,..Default::default()},
+            Err(_) => Self { locked:true, ..Default::default() },
+        }
     }
 
     pub fn record(&mut self, url: &str, title: &str) {
@@ -118,6 +124,7 @@ impl History {
         entry.last_visit = format_iso(now());
         entry.visits = entry.visits.wrapping_add(1);
         if !title.is_empty() { entry.title = title.into(); }
+        self.pending.push(Change::Visit(url.into(),title.into(),entry.last_visit.clone()));
         self.dirty = true;
     }
 
@@ -126,6 +133,7 @@ impl History {
         if let Some(entry) = self.entries.iter_mut().find(|e| e.url == url) {
             if entry.title != title {
                 entry.title = title.into();
+                self.pending.push(Change::Title(url.into(),title.into()));
                 self.dirty = true;
             }
         }
@@ -134,13 +142,16 @@ impl History {
     pub fn remove(&mut self, url: &str) {
         if let Some(index) = self.entries.iter().position(|e| e.url == url) {
             self.entries.remove(index);
+            self.pending.push(Change::Remove(url.into()));
             self.dirty = true;
         }
     }
 
     pub fn clear(&mut self) {
         self.entries.clear();
+        self.pending.clear();self.pending.push(Change::Clear);
         self.dirty = true;
+        self.forget_backup=true;
     }
 
     pub fn is_dirty(&self) -> bool { self.dirty }
@@ -197,6 +208,17 @@ impl History {
     }
 
     fn save_to(&mut self, path: &Path) -> io::Result<()> {
+        if self.locked { return Err(io::Error::other("Okunamayan geçmişin üzerine yazılmadı")); }
+        let _guard=crate::storage::RecordLock::acquire(path)?;
+        if self.loaded && !self.pending.is_empty(){
+            let entries=match crate::storage::read_json::<Vec<HistoryEntry>>(path){Ok(v)=>v,Err(e)if e.kind()==io::ErrorKind::NotFound=>vec![],Err(e)=>return Err(e)};
+            let mut merged=Self::new(entries);
+            for change in &self.pending{match change{
+                Change::Visit(url,title,when)=>{merged.record(url,title);if let Some(e)=merged.entries.iter_mut().find(|e|&e.url==url){e.last_visit=when.clone();}},
+                Change::Title(url,title)=>merged.update_title(url,title),
+                Change::Remove(url)=>merged.remove(url),Change::Clear=>merged.clear(),
+            }}self.entries=merged.entries;
+        }
         // C# gibi sınır yalnızca kaydederken uygulanır.
         if self.entries.len() > MAX_ENTRIES {
             let mut order: Vec<_> = (0..self.entries.len()).collect();
@@ -206,11 +228,10 @@ impl History {
             let mut index = 0;
             self.entries.retain(|_| { let retain = keep[index]; index += 1; retain });
         }
-        if let Some(dir) = path.parent() { fs::create_dir_all(dir)?; }
-        let temp = path.with_extension("json.tmp");
-        fs::write(&temp, serde_json::to_vec(&self.entries)?)?;
-        fs::rename(temp, path)?;
+        crate::storage::write_json(path, &self.entries)?;
+        if self.forget_backup{crate::storage::forget_backup(path);self.forget_backup=false;}
         self.dirty = false;
+        self.pending.clear();self.loaded=true;
         Ok(())
     }
 
@@ -406,10 +427,12 @@ mod tests {
         history.save_to(&dir.file()).unwrap();
         // Var olan hedefin üzerine ikinci atomik kayıt.
         history.save_to(&dir.file()).unwrap();
-        assert_eq!(serde_json::from_slice::<Value>(&fs::read(dir.file()).unwrap()).unwrap(), expected);
+        assert_eq!(crate::storage::read_json::<Value>(&dir.file()).unwrap(), expected);
         assert!(!dir.file().with_extension("json.tmp").exists());
         fs::write(dir.file(), b"broken").unwrap();
-        assert!(History::load_from(&dir.file()).entries.is_empty());
+        assert_eq!(History::load_from(&dir.file()).entries.len(),1);
+        crate::storage::remove(&dir.file());fs::write(dir.file(),b"broken").unwrap();
+        let mut broken=History::load_from(&dir.file());assert!(broken.entries.is_empty());assert!(broken.save_to(&dir.file()).is_err());
     }
 
     #[test]

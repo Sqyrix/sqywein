@@ -13,13 +13,12 @@ Sıra: **1) motor ve Rust'a tam geçiş → 2) adblock → 3) Sqywein tasarımı
 
 Rust sürümünün kabuk hedefi: **boşta < 10 MB**, soğuk açılış **< 150 ms** (pencere görünene kadar).
 
-## Durum (7 Kasım 2026)
+## Durum (10 Kasım 2026)
 
 - **Faz 1-2 (motor, Rust'a geçiş, eşitlik):** tamam. C# sürümü kaldırıldı.
 - **Faz 3 (reklam engelleyici):** tamam. Ağ + kozmetik + YouTube modülü, Kapalı/Temel/İdeal/Tam modları.
-- **Faz 4 (tasarım):** ilk tur tamam: vurgu rengi seçimi, Ctrl+K komut paleti (sekmeye geç, komutlar),
-  uyuyan kedi, menü açılış animasyonu, maskotlu hata sayfası. Sırada: açık tema, dikey sekmeler.
-- **Faz 5 (paketleme):** başlanmadı.
+- **Faz 4 (tasarım):** Safari esintili düzen, açık/koyu/Sqywein/sistem temaları, komut paleti, sekme ızgarası ve yerel yardımcı paneller mevcut. Dikey sekmeler plan aşamasında.
+- **Faz 5 (paketleme):** kurulum, otomatik güncelleme ve GitHub Releases mevcut. Son yerel aday 0.4.5: şifreli oturum/geçmiş, sağlam yedek, site bilgi paneli, UI Automation ve otomatik pil politikası. Ayrıntılar [çekirdek incelemesinde](docs/2026-11-10-core-hardening.md).
 
 ## Performans (7 Kasım 2026, Rust sürümü ile C# sürümü)
 
@@ -43,7 +42,7 @@ Toplam = kabuk + motorun tüm süreçleri (özel çalışma kümesi). Açılış
 | Dil | Rust (stable), tek crate, repo kökünde | C# sürümü 7 Kasım 2026'da kaldırıldı; tüm özellikleri Rust'ta |
 | Pencere | Saf Win32 (`windows` crate), kendi başlık çubuğumuz (DWM + `WM_NCCALCSIZE`) | En hafif yol; tasarımda tam özgürlük |
 | Arayüz çizimi | Direct2D + DirectWrite, kendi küçük widget katmanımız | HTML arayüz ayrı renderer süreci (~30 MB) demek; kendi çizimimizle Zen/Arc tarzı özgün tasarım yine mümkün |
-| Motor | WebView2 (`webview2-com`), tek `CoreWebView2Environment`, sekme başına bir controller | Site uyumluluğu %100; Windows'ta zaten kurulu |
+| Motor | WebView2 (`webview2-com`), tek `CoreWebView2Environment`, sekme başına bir controller | Chromium tabanlı; giriş, DRM ve işletim sistemi entegrasyonları ayrıca doğrulanır |
 | Açılır pencereler (öneriler, menüler) | Ayrı `WS_POPUP` katmanlı pencereler | WebView'in üstünde görünebilsinler (airspace sorunu) |
 | Metin girişi | İlk aşamada stillendirilmiş yerel `EDIT` kontrolü, tasarım fazında kendi kutumuz | IME, pano, seçim bedavaya gelir |
 | Veri | `serde_json`, **aynı** `%LOCALAPPDATA%\Sqywein` klasörü ve aynı `state.json` / `history.json` biçimi | Mevcut sekmeler, geçmiş, favoriler kaybolmaz |

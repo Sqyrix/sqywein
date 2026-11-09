@@ -36,12 +36,10 @@ impl App {
             return;
         }
         self.cookies_restored = true;
-        if !self.restores_session() {
+        if !self.restores_session() || crate::windows_session::secondary() {
             return;
         }
-        let Ok(sealed) = std::fs::read(cookie_file(&self.state.current_profile)) else { return };
-        let Some(plain) = net::unprotect(&sealed) else { return };
-        if let Ok(cookies) = serde_json::from_slice::<Vec<CookieData>>(&plain) {
+        if let Ok(cookies) = crate::storage::read_secret_json::<Vec<CookieData>>(&cookie_file(&self.state.current_profile)) {
             engine::restore_cookies(view, &cookies);
         }
     }
@@ -53,30 +51,27 @@ impl App {
         }
         match self.any_view() {
             Some(view) => {
-                engine::snapshot_session_cookies(&view, self.state.current_profile.clone(), self.cookie_epochs.get(&self.state.current_profile).copied().unwrap_or(0))
+                let Some(generation)=crate::cookie_checkpoint::generation(&self.state.current_profile) else{return false};
+                engine::snapshot_session_cookies(&view, self.state.current_profile.clone(), generation)
             }
             None => false,
         }
     }
 
     pub(super) fn on_cookies(&mut self, profile: &str, generation: u64, cookies: Option<Vec<CookieData>>) {
-        if generation != self.cookie_epochs.get(profile).copied().unwrap_or(0) { return; }
+        let Some(_guard)=crate::cookie_checkpoint::lock_current(profile,generation) else{if self.closing{self.finish_close();}return};
         if let Some(mut cookies) = cookies {
           use sha2::{Digest, Sha256};
           cookies.sort_by(|a,b| (&a.domain,&a.path,&a.name).cmp(&(&b.domain,&b.path,&b.name)));
-          if let Ok(json) = serde_json::to_vec(&cookies) {
+          if let Ok(json) = serde_json::to_vec(&cookies).map(zeroize::Zeroizing::new) {
             let hash: [u8; 32] = Sha256::digest(&json).into();
             let path = cookie_file(profile);
             if self.cookie_hashes.get(&profile.to_owned()) == Some(&hash) && path.exists() {
                 if self.closing { self.finish_close(); }
                 return;
             }
-            if let Some(sealed) = net::protect(&json) {
-                let _ = std::fs::create_dir_all(state::root());
-                let temp = path.with_extension("tmp");
-                if std::fs::write(&temp, sealed).is_ok() && std::fs::rename(temp, path).is_ok() {
-                    self.cookie_hashes.insert(profile.to_owned(), hash);
-                }
+            if crate::storage::write_json(&path,&cookies).is_ok() {
+                self.cookie_hashes.insert(profile.to_owned(), hash);
             }
           }
         }
@@ -87,11 +82,13 @@ impl App {
 
     pub(super) fn clear_saved_cookies(&mut self) {
         self.cookie_hashes.remove(&self.state.current_profile);
-        *self.cookie_epochs.entry(self.state.current_profile.clone()).or_insert(0) += 1;
+        if let Ok(epoch)=crate::cookie_checkpoint::begin(&self.state.current_profile){self.cookie_epochs.insert(self.state.current_profile.clone(),epoch);}
         let path = cookie_file(&self.state.current_profile);
-        let _ = std::fs::remove_file(&path);
+        crate::storage::remove(&path);
         let _ = std::fs::remove_file(path.with_extension("tmp"));
     }
+
+    pub(super) fn finish_cookie_clear(&mut self,profile:&str){if let Some(epoch)=self.cookie_epochs.remove(profile){crate::cookie_checkpoint::finish(profile,epoch);}}
 
     /// Pencere kapanışı: önce çerezler toplanır, sonra her şey kapatılır.
     pub(super) fn begin_close(&mut self) {
@@ -113,7 +110,9 @@ impl App {
     pub(super) fn finish_close(&mut self) {
         self.cleanup_auth_popups(true);
         unsafe { let _ = KillTimer(Some(self.hwnd), TIMER_CLOSE); }
+        self.state.session_clean = true;
         self.save();
+        crate::windows_session::close();
         let _ = self.history.save_profile(&self.state.current_profile);
         for t in &mut self.tabs {
             t.close_view();

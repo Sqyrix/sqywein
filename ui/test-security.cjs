@@ -74,6 +74,7 @@ const server=http.createServer((req,res)=>{res.setHeader('Content-Type','text/ht
   check((await cosmetic.evaluate(()=>window.__messages.length))===0,'disabling collector cancels pending scan');await cosmetic.close();
   const pw=await context.newPage();await pw.addInitScript(autofill);await pw.goto(base);
   await pw.waitForFunction(()=>window.__messages.some(m=>m.type==='pw.query'));
+  await pw.waitForTimeout(400); // sayfa yüklenince yapılan tek seferlik ek tarama bitsin
   await pw.evaluate(()=>{
     window.__formScans=0;
     const original=document.querySelectorAll.bind(document);

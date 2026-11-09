@@ -52,7 +52,7 @@ async function freePort(){return new Promise(resolve=>{const s=net.createServer(
   check(pdf.url().startsWith('file:///')&&pdf.url().endsWith('document.pdf'),'associated local PDF reaches the built-in viewer');
   const settings=await forward('sqywein://settings');await settings.locator('#settings:not([hidden])').waitFor();
   check(typeof await settings.evaluate(()=>new Promise(resolve=>{const off=on('settings.get',d=>{off();resolve(d.defaultBrowser)});send('settings.get')}))==='boolean','Windows default-browser status is queried');
-  await delay(5500);const saved=JSON.parse(fs.readFileSync(path.join(data,'state.json'),'utf8'));
+  await delay(5500);const saved=require('../ui/qa-storage.cjs').readJson(path.join(data,'state.json'));
   check(saved.Tabs.length===6&&!saved.Tabs.some(t=>t.Url.includes('q=--')),'launch separator never becomes a search or extra tab');
   fs.writeFileSync(path.join(data,'results.json'),JSON.stringify({checks,description:'Local mock auth and captive portal; real Windows WM_COPYDATA handoff and file URLs. No real Google account, Wi-Fi gateway or changed default associations.'},null,2));
   console.log(`PASS: ${checks} Windows/browser integration assertions. ${data}`);

@@ -1,5 +1,5 @@
 //! Windows aday kaydı varsayılan seçimini değiştirmez; seçim Windows Ayarlar'dadır.
-use std::{path::Path, process::Command};
+use std::path::Path;
 use windows::{core::*, Win32::{Foundation::*, System::{Threading::CreateMutexW, Registry::*}, UI::{Shell::*, WindowsAndMessaging::*}}};
 
 pub struct Instance(HANDLE);
@@ -54,9 +54,22 @@ fn instance_key() -> String {
 }
 pub fn mark_window(hwnd: HWND) -> Result<()> {
     unsafe { SetPropW(hwnd, &HSTRING::from(instance_key()), Some(HANDLE(1usize as _)))?; }
+    if crate::windows_session::private(){unsafe{SetPropW(hwnd,w!("Sqywein.PrivateWindow"),Some(HANDLE(1usize as _)))?;}}
     if let Err(e) = set_window_identity(hwnd) { crate::log::line(&format!("Pencere kimliği verilemedi: {e}")); }
     Ok(())
 }
+
+pub fn other_normal_windows()->bool{
+    let pid=unsafe{windows::Win32::System::Threading::GetCurrentProcessId()};
+    let mut found=false;
+    for hwnd in windows(){unsafe{let mut owner=0;GetWindowThreadProcessId(hwnd,Some(&mut owner));if owner!=pid && GetPropW(hwnd,w!("Sqywein.PrivateWindow")).is_invalid(){found=true;break}}}found
+}
+pub fn windows()->Vec<HWND>{
+    struct Search{key:HSTRING,windows:Vec<HWND>}
+    unsafe extern "system" fn visit(hwnd:HWND,param:LPARAM)->BOOL{let s=&mut*(param.0 as *mut Search);if !GetPropW(hwnd,&s.key).is_invalid(){s.windows.push(hwnd);}true.into()}
+    let mut search=Search{key:HSTRING::from(instance_key()),windows:vec![]};unsafe{let _=EnumWindows(Some(visit),LPARAM(&mut search as *mut _ as isize));}search.windows
+}
+pub fn close_all(){for hwnd in windows(){unsafe{let _=PostMessageW(Some(hwnd),WM_CLOSE,WPARAM(0),LPARAM(0));}}}
 /// Kurulu (varsayılan veri klasörlü) Sqywein şu an açık mı?
 pub fn main_running() -> bool {
     use windows::Win32::System::Threading::{OpenMutexW, SYNCHRONIZATION_SYNCHRONIZE};
@@ -86,7 +99,7 @@ pub fn acquire_or_forward() -> Result<Option<Instance>> {
         let handle = CreateMutexW(None, false, &mutex_name)?;
         let exists = GetLastError() == ERROR_ALREADY_EXISTS;
         let instance = Instance(handle);
-        if !exists { return Ok(Some(instance)); }
+        if !exists || crate::windows_session::secondary() { return Ok(Some(instance)); }
         for _ in 0..200 {
             if let Some(hwnd) = existing_window() {
                 let bytes = serde_json::to_vec(&launch_arguments(std::env::args().skip(1))).unwrap_or_default();
@@ -276,17 +289,6 @@ pub fn open_default_settings() -> std::io::Result<()> {
     if !is_dev() { register_browser()?; }
     let result = unsafe { ShellExecuteW(None, w!("open"), w!("ms-settings:defaultapps?registeredAppUser=Sqywein"), PCWSTR::null(), PCWSTR::null(), SW_SHOWNORMAL) };
     if result.0 as isize <= 32 { Err(std::io::Error::other("Windows varsayılan uygulamalar ekranı açılamadı")) } else { Ok(()) }
-}
-/// Sistem varsayılanı kendimiz olabilir; aynı URL'yi ona geri yollayıp döngü yaratmayız.
-pub fn open_compatible_browser(url: &str) -> std::io::Result<()> {
-    if !(url.starts_with("https://") || url.starts_with("http://")) { return Err(std::io::Error::other("Yalnızca web adresleri açılabilir")); }
-    for root in ["ProgramFiles(x86)","ProgramFiles","LOCALAPPDATA"].into_iter().filter_map(std::env::var_os) {
-      for suffix in ["Microsoft/Edge/Application/msedge.exe","Google/Chrome/Application/chrome.exe"] {
-        let path=std::path::PathBuf::from(&root).join(suffix);
-        if path.is_file() { Command::new(path).arg(url).spawn()?; return Ok(()); }
-      }
-    }
-    Err(std::io::Error::other("Uyumlu başka tarayıcı bulunamadı"))
 }
 #[cfg(test)]
 mod tests {

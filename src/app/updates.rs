@@ -57,6 +57,7 @@ impl App {
 
     /// "Güncelle": yeni exe yerine konur, oturum kaydedilip yeni sürüm açılır.
     pub(super) fn apply_update(&mut self) {
+        if crate::integration::windows().len()>1{self.open_surface(super::overlay::Surface::Notice("Güncellemeyi kurmadan önce diğer Sqywein pencerelerini kapatın. Açık sekmeleriniz korunur.".into()));return;}
         let Some((version, path)) = self.update_ready.clone() else { return };
         match update::install(&path) {
             Ok(exe) => {

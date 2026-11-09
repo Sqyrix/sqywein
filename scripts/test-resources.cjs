@@ -26,7 +26,7 @@ async function port(){return new Promise(resolve=>{const s=net.createServer();s.
   let settings;
   for(let i=0;i<100;i++){settings=context.pages().find(p=>p.url().includes('sqywein.ui/settings'));if(settings)break;await delay(100)}
   check(settings,'settings control page ready');await settings.waitForFunction(()=>typeof send==='function');
-  async function open(suffix){const [p]=await Promise.all([context.waitForEvent('page'),settings.evaluate(url=>send('open',{url,newTab:true}),base+'/'+suffix)]);await p.waitForFunction(()=>window.ready);return p}
+  async function open(suffix){const before=new Set([...fs.readFileSync(log,'utf8').matchAll(/GEZİNME #(\d+)/g)].map(m=>Number(m[1])));const [p]=await Promise.all([context.waitForEvent('page'),settings.evaluate(url=>send('open',{url,newTab:true}),base+'/'+suffix)]);await p.waitForFunction(()=>window.ready);const ids=[...new Set([...fs.readFileSync(log,'utf8').matchAll(/GEZİNME #(\d+)/g)].map(m=>Number(m[1])))].filter(id=>!before.has(id));assert.equal(ids.length,1,'fixture navigation has one new native tab id');p.nativeTabId=ids[0];return p}
   async function close(p){const done=p.waitForEvent('close',{timeout:10000});await p.evaluate(()=>window.close());await done}
   async function sample(){const {stdout}=await run('powershell.exe',['-NoProfile','-File',path.join(__dirname,'measure.ps1'),'-BrowserId',String(child.pid),'-Seconds','1'],{windowsHide:true});return JSON.parse(stdout)}
   const probe=await open('probe');await close(probe);check(!context.pages().includes(probe),'normal view closes through native WindowCloseRequested');
@@ -51,8 +51,8 @@ async function port(){return new Promise(resolve=>{const s=net.createServer();s.
    let n=0;window.paintTimer=setInterval(()=>{ctx.fillStyle=n++%2?'red':'blue';ctx.fillRect(0,0,32,32)},100);
    await Promise.race([v.play(),new Promise((_,reject)=>setTimeout(()=>reject(Error('Video did not start')),8000))]);
   });
-  const normalId=Number(fs.readFileSync(log,'utf8').match(/GEZİNME #(\d+) .*\/idle\r?\n/)[1]);
-  const protectedIds=['edited','peer','video'].map(name=>Number(fs.readFileSync(log,'utf8').match(new RegExp('GEZİNME #(\\d+) .*\\/'+name+'\\r?\\n'))[1]));
+  const normalId=normal.nativeTabId;
+  const protectedIds=[edited,peer,audio].map(p=>p.nativeTabId);
   const parked=await open('active');check(context.pages().length===6,'multiple content types load concurrently');
   const cookieFile=path.join(data,'session-default.bin');
   for(let i=0;i<350&&!fs.existsSync(cookieFile);i++)await delay(100);

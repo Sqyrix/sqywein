@@ -7,7 +7,7 @@
 'use strict';
 const mode=location.hash.slice(1),query=document.getElementById('query'),results=document.getElementById('results');
 const heading=document.getElementById('heading');let data=null,index=0,timer=0,generation=0;const thumbs=new Map(),thumbsDone=new Set();
-heading.textContent=({spotlight:'Hızlı erişim',tabs:'Sekmelere genel bakış',download:'Hızlı Bakış',text:'Canlı Metin',notice:'Bilgi'})[mode]||'Hızlı erişim';
+heading.textContent=({site:'Site bilgileri',spotlight:'Hızlı erişim',tabs:'Sekmelere genel bakış',download:'Hızlı Bakış',text:'Canlı Metin',notice:'Bilgi'})[mode]||'Hızlı erişim';
 query.hidden=!['spotlight','tabs'].includes(mode);document.getElementById('hint').hidden=query.hidden;
 if(mode==='tabs'){query.placeholder='Sekmeleri filtrele…';results.className='grid';}
 const commands=[['settings','Ayarlar'],['downloads','İndirmeler'],['history','Geçmiş'],['bookmarks','Yer işaretleri'],['focus','Odak modunu değiştir'],['translate','Sayfa çevirisini değiştir'],['share','Sayfayı paylaş'],['pip','Görüntü içinde görüntü'],['new','Yeni sekme']];
@@ -20,6 +20,7 @@ function open(item){if(item.id!==undefined)send('overlay.activate',{id:item.id})
 function row(item,kind){const b=el('button',{type:'button',class:'result',onclick:()=>open(item)},el('span',{class:'info'},el('strong',{},item.title||item.url),el('small',{},item.url||'Sqywein')),el('span',{class:'kind'},kind));return b;}
 function render(){
  if(!data)return;results.replaceChildren();const q=query.value.toLocaleLowerCase('tr-TR');const match=i=>(String(i.title)+' '+String(i.url)).toLocaleLowerCase('tr-TR').includes(q);
+ if(mode==='site'){results.className='site-info';renderSite();return;}
  if(mode==='tabs'){
   for(const tab of (data.tabs||[]).filter(match)){const button=el('button',{class:'tile',type:'button','data-id':tab.id,'aria-current':String(tab.active),onclick:()=>open(tab)});const thumbnail=thumbs.get(tab.id);button.append(thumbnail?el('img',{class:'thumbnail',src:thumbnail,alt:''}):el('div',{class:'placeholder'},tab.sleeping?'Belleği korumak için uyuyor':thumbsDone.has(tab.id)?'Önizleme alınamadı':'Önizleme hazırlanıyor'),el('div',{class:'caption'},el('strong',{},tab.title),el('small',{},host(tab.url)||'Yeni sekme')));results.append(button);}
  }else if(mode==='spotlight'){
@@ -38,10 +39,32 @@ function render(){
  }
  if(!results.childNodes.length)results.append(el('p',{role:'status'},'Eşleşen sekme bulunamadı.'));index=0;if(!query.hidden)select(0);
 }
+function renderSite(){
+ const security=data.security||{},cert=security.certificateSecurityState||{};
+ results.append(el('h2',{},data.origin||'Site'),el('p',{role:'status'},data.http?'Bu bağlantı HTTP kullanıyor; şifreli değil.':security.securityState==='secure'?'Bağlantı şifreli. Bu, sitenin güvenilir olduğunun garantisi değildir.':['insecure','insecure-broken'].includes(security.securityState)?'Bağlantıda bir güvenlik sorunu var.':'Bağlantı bilgisi henüz doğrulanamadı.'));
+ const details=el('details',{},el('summary',{},'Bağlantı ve sertifika ayrıntıları'));
+ const date=value=>typeof value==='number'?new Date(value*1000).toLocaleString():'';
+ for(const [name,value]of [['Protokol',cert.protocol],['Şifreleme',cert.cipher],['Sertifika sahibi',cert.subjectName],['Veren kuruluş',cert.issuer],['Başlangıç',date(cert.validFrom)],['Bitiş',date(cert.validTo)],['Sertifika hatası',cert.certificateNetworkError],['WebView2 sürümü',data.runtime]])if(value)details.append(el('p',{},el('strong',{},name+': '),String(value)));
+ results.append(details,el('h3',{},'Bu sitenin izinleri'));
+ for(const [kind,name]of [[4,'Bildirimler'],[2,'Kamera'],[1,'Mikrofon'],[3,'Konum'],[6,'Pano']]){
+  const select=el('select',{'aria-label':name,disabled:!!data.private});
+  for(const [value,label]of [[0,'Sor / varsayılan'],[1,'İzin ver'],[2,'Engelle']])select.append(el('option',{value:String(value)},label));
+  select.value=String((data.permissions||[]).find(p=>p.kind===kind)?.state||0);
+  select.onchange=()=>{select.disabled=true;send('overlay.site.permission',{kind,state:Number(select.value)});};
+  results.append(el('label',{class:'site-permission'},el('span',{},name),select));
+ }
+ if(data.private)results.append(el('p',{},'Gizli sekmede kalıcı izin değişikliği yapılmaz; izin isteğini sayfadan başlatabilirsiniz.'));
+ const clear=el('button',{type:'button',class:'quiet',onclick:()=>{clear.disabled=true;send('overlay.site.clear');}},'Bu sitenin verilerini temizle');
+ const confirm=el('div',{hidden:true},el('p',{},'Bu sitedeki girişiniz kapanabilir. Aynı alan adını paylaşan oturumlar da etkilenebilir. Diğer sitelerin verileri korunur.'),clear,el('button',{type:'button',class:'quiet',onclick:()=>{confirm.hidden=true;}},'Vazgeç'));
+ results.append(el('button',{type:'button',class:'quiet',onclick:()=>{confirm.hidden=false;clear.focus();}},'Site verilerini temizle…'),confirm,el('p',{id:'site-status',role:'status','aria-live':'polite'}));
+}
+on('site.info',d=>{data={...d,permissions:data?.permissions||[]};render();});
+on('site.permissions',d=>{if(mode!=='site')return;const focused=document.activeElement?.getAttribute('aria-label');data={...(data||{}),permissions:d.items};render();if(focused)[...results.querySelectorAll('select')].find(s=>s.getAttribute('aria-label')===focused)?.focus();});
+on('site.cleared',d=>{const status=document.getElementById('site-status');if(status)status.textContent=d.ok?'Site verileri temizlendi. Değişikliğin uygulanması için sayfayı yenileyin.':'Veriler temizlenemedi. Yeniden deneyin.';});
 on('overlay.get',d=>{if(d.query!==undefined&&d.query!==query.value.toLowerCase())return;data=d;render();});
 on('overlay.preview',d=>{if(mode!=='download')return;data={...(data||{}),preview:d.preview};render();});
 on('overlay.thumbnail',d=>{thumbsDone.add(d.id);if(d.image===''){const tile=[...results.querySelectorAll('[data-id]')].find(n=>n.dataset.id===String(d.id));const placeholder=tile?.querySelector('.placeholder');if(placeholder)placeholder.textContent='Önizleme alınamadı';return;}if(typeof d.image!=='string'||!d.image.startsWith('data:image/png;base64,'))return;thumbs.set(d.id,d.image);const tile=[...results.querySelectorAll('[data-id]')].find(n=>n.dataset.id===String(d.id));if(tile){const old=tile.querySelector('.placeholder,.thumbnail');old?.replaceWith(el('img',{class:'thumbnail',src:d.image,alt:''}));}});
 query.addEventListener('input',()=>{clearTimeout(timer);render();if(mode==='tabs')return;const seq=++generation;timer=setTimeout(()=>{if(seq===generation)send('overlay.get',{query:query.value});},100);});
-document.addEventListener('keydown',e=>{if(e.key==='Escape'){e.preventDefault();close();}else if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();select(index+(e.key==='ArrowDown'?1:-1));}else if(e.key==='Enter'&&e.target===query){e.preventDefault();choices()[index]?.click();}});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){e.preventDefault();close();}else if(mode==='site'){return;}else if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();select(index+(e.key==='ArrowDown'?1:-1));}else if(e.key==='Enter'&&e.target===query){e.preventDefault();choices()[index]?.click();}});
 send('overlay.get',{thumbnails:mode==='tabs'});if(!query.hidden)query.focus();
 </script></body></html>

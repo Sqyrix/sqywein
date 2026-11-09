@@ -1,7 +1,8 @@
 //! Profil başına DPAPI ile şifrelenen parola kasası.
 
 use serde::{Deserialize, Serialize};
-use std::{fs, io, path::PathBuf};
+use std::{io, path::PathBuf};
+#[cfg(test)] use std::fs;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Credential {
@@ -12,6 +13,9 @@ pub struct Credential {
     pub note: String,
     pub created: String,
     pub last_used: String,
+}
+impl Drop for Credential {
+    fn drop(&mut self) { use zeroize::Zeroize; self.password.zeroize(); }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -36,15 +40,19 @@ pub struct Vault {
     next_id: u64,
     #[serde(skip)]
     dirty: bool,
+    #[serde(skip)]
+    locked: bool,
 }
 
 impl Vault {
+    pub fn available(&self)->bool{!self.locked}
     pub fn load(profile: &str) -> Vault {
-        let mut vault: Self = fs::read(path(profile))
-            .ok()
-            .and_then(|bytes| crate::net::unprotect(&bytes))
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .unwrap_or_default();
+        if !crate::state::valid_profile(profile) { return Self { locked:true, ..Default::default() }; }
+        let mut vault: Self = match crate::storage::read_secret_json(&path(profile)) {
+            Ok(v) => v,
+            Err(e) if e.kind()==io::ErrorKind::NotFound => Self::default(),
+            Err(_) => Self { locked:true, ..Default::default() },
+        };
         vault.next_id = vault.next_id.max(
             vault
                 .items
@@ -58,23 +66,9 @@ impl Vault {
     }
 
     pub fn save(&mut self, profile: &str) -> io::Result<()> {
+        if self.locked || !crate::state::valid_profile(profile) { return Err(io::Error::other("Kasa doğrulanamadı; üzerine yazılmadı")); }
         let target = path(profile);
-        fs::create_dir_all(target.parent().unwrap())?;
-        let bytes = crate::net::protect(&serde_json::to_vec(self)?)
-            .ok_or_else(|| io::Error::other("Kasa şifrelenemedi"))?;
-        let temp = target.with_extension("bin.tmp");
-        let result = (|| {
-            use io::Write;
-            let mut file = fs::File::create(&temp)?;
-            file.write_all(&bytes)?;
-            file.sync_all()?;
-            drop(file);
-            fs::rename(&temp, &target)
-        })();
-        if result.is_err() {
-            let _ = fs::remove_file(&temp);
-        }
-        result?;
+        crate::storage::write_json(&target,self)?;
         self.dirty = false;
         Ok(())
     }
@@ -304,7 +298,7 @@ impl Vault {
     }
 }
 
-fn path(profile: &str) -> PathBuf {
+pub(crate) fn path(profile: &str) -> PathBuf {
     // Profil kimliği dosya yolundan dışarı çıkamaz.
     let profile: String = profile
         .chars()
@@ -336,7 +330,7 @@ fn fold(s: &str) -> String {
 }
 
 // Yalnızca web ve Android kaynakları; kullanıcı bilgisi ve yol saklanmaz.
-fn origin(url: &str) -> Option<String> {
+pub(crate) fn origin(url: &str) -> Option<String> {
     let (scheme, rest) = url.trim().split_once("://")?;
     let scheme = scheme.to_ascii_lowercase();
     if !["http", "https", "android"].contains(&scheme.as_str()) {
@@ -658,6 +652,8 @@ adobe.com,https://account.adobe.com/,emir@ornek.com,d1,
         loaded.upsert("https://two.com", "u", "p");
         assert_eq!(loaded.items[1].id, 2);
         fs::write(path("test"), b"broken").unwrap();
-        assert_eq!(Vault::load("test").len(), 0);
+        assert_eq!(Vault::load("test").len(), 1);
+        crate::storage::remove(&path("test"));fs::write(path("test"),b"broken").unwrap();
+        assert!(Vault::load("test").save("test").is_err());
     }
 }

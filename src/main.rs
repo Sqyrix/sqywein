@@ -2,8 +2,10 @@
 #![windows_subsystem = "windows"]
 
 mod adblock;
+mod accessibility;
 mod app;
 mod cache;
+mod cookie_checkpoint;
 mod engine;
 mod ocr;
 mod widgets;
@@ -20,6 +22,8 @@ mod net;
 mod passwords;
 mod setup;
 mod state;
+mod windows_session;
+mod storage;
 mod theme;
 mod ui;
 mod update;

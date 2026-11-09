@@ -14,9 +14,9 @@ use windows::{
     core::*,
     Win32::{
         Foundation::*,
-        Graphics::{Dwm::*, Gdi::{InvalidateRect, GetMonitorInfoW, MonitorFromPoint, MonitorFromWindow, MONITOR_DEFAULTTONEAREST, MONITORINFO}},
+        Graphics::{Dwm::*, Gdi::{ClientToScreen, InvalidateRect, GetMonitorInfoW, MonitorFromPoint, MonitorFromWindow, MONITOR_DEFAULTTONEAREST, MONITORINFO}},
         System::LibraryLoader::GetModuleHandleW,
-        UI::WindowsAndMessaging::*,
+        UI::{WindowsAndMessaging::*,Input::KeyboardAndMouse::SetFocus},
     },
 };
 
@@ -24,6 +24,7 @@ pub const CLASS: PCWSTR = w!("SqyweinMenu");
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MenuKind {
+    Permission,
     Main,
     Profile,
     Extensions,
@@ -36,10 +37,42 @@ pub enum MenuKind {
     Translate,
 }
 
+#[derive(Clone,Copy,PartialEq,Eq,Debug)]
+pub enum Category { Main, File, Edit, View, History, Bookmarks, Reading, Develop, Window, Help }
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MenuCmd {
-    SwitchMode,
-    Spotlight,
+    Category(Category),
+    NewWindow,
+    PrivateWindow,
+    FullScreen,
+    Edit(u8),
+    SavePage,
+    ClearData,
+    ToggleBookmarksBar,
+    BookmarkAll,
+    ReopenTab,
+    OpenMenuLink(usize),
+    OpenReading(usize),
+    RemoveReading(usize),
+    BookmarkPage,
+    OpenLocation,
+    CloseTab,
+    Back,
+    Forward,
+    Home,
+    Reload,
+    ViewSource,
+    Minimize,
+    Maximize,
+    CheckUpdates,
+    AddReading,
+    Reader,
+    About,
+    Help,
+    ReportIssue,
+    PermissionAllow,
+    PermissionDeny,
     Overview,
     PreviewDownload(u32),
     TranslationOptions,
@@ -60,7 +93,6 @@ pub enum MenuCmd {
     FocusMode,
     PictureInPicture,
     NewTab,
-    PrivateTab,
     History,
     Downloads,
     Bookmarks,
@@ -72,8 +104,6 @@ pub enum MenuCmd {
     Find,
     DevTools,
     Settings,
-    NetworkLogin,
-    OpenCompatible(u32),
     SitePermissions,
     Exit,
     SignIn,
@@ -186,6 +216,7 @@ const PAD: f32 = 6.0;
 const SIDE_W: f32 = 84.0;
 
 pub struct Menu {
+    accessibility: Option<crate::accessibility::Tree>,
     pub hwnd: HWND,
     pub kind: MenuKind,
     gfx: Gfx,
@@ -228,11 +259,45 @@ pub fn avatar(g: &Gfx, r: Rect, photo: Option<&Image>, color: Rgb, name: &str) {
 }
 
 impl Menu {
+    fn accessible_parts(&self)->Vec<(Part,String,Rect,bool)> {
+        let mut parts=Vec::new();
+        for (i,(item,r)) in self.items.iter().zip(self.rows()).enumerate(){
+            match item {
+                Item::Action{label,enabled,side,..}=>{parts.push((Part::Row(i),label.clone(),r,*enabled));if side.is_some(){parts.push((Part::Side(i),format!("{label} — diğer işlem"),Rect::new(r.right()-SIDE_W,r.y,SIDE_W,r.h),*enabled));}},
+                Item::Translation{..}=>{for (part,label) in [(Part::TranslationSource,"Orijinal dil"),(Part::TranslationTarget,"Çevir"),(Part::TranslationOptions,"Çeviri seçenekleri"),(Part::TranslationClose,"Çeviri panelini kapat")]{parts.push((part,label.into(),r,true));}},
+                Item::Zoom=>{parts.push((Part::Minus,"Uzaklaştır".into(),r,true));parts.push((Part::Plus,"Yakınlaştır".into(),r,true));},
+                Item::Slider{..}=>{for n in 0..=3 {parts.push((Part::Level(n),format!("Reklam engelleme seviyesi {n}"),r,true));}},
+                Item::Download(d)=>{parts.push((Part::Row(i),d.line.clone(),r,d.done));parts.push((Part::Side(i),if d.done{"Klasörde göster"}else{"İndirmeyi iptal et"}.into(),r,true));},
+                _=>{},
+            }
+        }
+        parts
+    }
+    fn refresh_accessibility(&self){
+        let Some(tree)=&self.accessibility else{return};let mut origin=POINT::default();unsafe{let _=ClientToScreen(self.hwnd,&mut origin);}
+        let scale=self.dpi as f32/96.0;
+        let parts=self.accessible_parts();
+        let nodes=parts.iter().enumerate().map(|(i,(part,name,r,enabled))|crate::accessibility::Node{key:i as u32+1,name:name.clone(),rect:RECT{left:origin.x+(r.x*scale) as i32,top:origin.y+(r.y*scale) as i32,right:origin.x+(r.right()*scale) as i32,bottom:origin.y+(r.bottom()*scale) as i32},tab:false,selected:false,enabled:*enabled && !self.exiting && self.command(*part).is_some()}).collect();
+        let heading=self.items.iter().filter_map(|i|if let Item::Header(h)=i{Some(format!("{} — {}",h.title,h.sub))}else{None}).collect::<Vec<_>>().join(" ");
+        let focus=parts.iter().position(|(p,_,_,_)|Some(*p)==self.hover).map(|i|i as u32+1);
+        tree.update(&format!("Sqywein menüsü {heading}"),nodes,focus);
+    }
+    pub fn accessibility_root(&mut self,wparam:WPARAM,lparam:LPARAM)->LRESULT{
+        self.accessibility.get_or_insert_with(Default::default);self.refresh_accessibility();
+        let root=self.accessibility.as_ref().unwrap().root(self.hwnd);
+        unsafe{windows::Win32::UI::Accessibility::UiaReturnRawElementProvider(self.hwnd,wparam,lparam,&root)}
+    }
+    pub fn accessibility_invoke(&self,key:u32)->Option<MenuCmd>{
+        if self.exiting{return None}let (part,_,_,enabled)=self.accessible_parts().get(key.checked_sub(1)? as usize)?.clone();if enabled{self.command(part)}else{None}
+    }
+    pub fn accessibility_focus(&mut self,key:u32){
+        if let Some((part,_,_,_))=self.accessible_parts().get(key.saturating_sub(1) as usize){self.set_hover(Some(*part));unsafe{let _=SetFocus(Some(self.hwnd));let _=InvalidateRect(Some(self.hwnd),None,false);}self.refresh_accessibility();if let Some(tree)=&self.accessibility{tree.focus_event(self.hwnd,key);}}
+    }
     /// `anchor`: menünün sağ üst köşesi (ekran pikseli).
     pub fn open(owner: HWND, kind: MenuKind, anchor: POINT, dpi: u32, items: Vec<Item>, zoom: Option<f64>, hardware: bool) -> Result<Self> {
         let s = dpi as f32 / 96.0;
         let h: f32 = items.iter().map(Item::height).sum::<f32>() + 2.0 * PAD;
-        let (mut wpx, mut hpx) = (((if kind == MenuKind::Translate { 380.0 } else { MENU_WIDTH }) * s).round() as i32, (h * s).round() as i32);
+        let (mut wpx, mut hpx) = (((if matches!(kind, MenuKind::Translate | MenuKind::Permission) { 380.0 } else { MENU_WIDTH }) * s).round() as i32, (h * s).round() as i32);
         let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
         unsafe { let _ = GetMonitorInfoW(MonitorFromPoint(anchor, MONITOR_DEFAULTTONEAREST), &mut info); }
         let work = info.rcWork;
@@ -273,7 +338,7 @@ impl Menu {
             if glass && crate::app::apply_backdrop(hwnd, true) {
                 gfx.set_glass(true);
             }
-            Ok(Self { hwnd, kind, gfx, items, hover: None, zoom, dpi, size: (wpx as u32, hpx as u32), fade: if motion_enabled() { Some((std::time::Instant::now(), target)) } else { None }, alpha: if motion_enabled() { 0 } else { 255 }, exit_alpha: 255, exiting: false, drag: None, hold: None, scroll: 0.0 })
+            Ok(Self { accessibility:None, hwnd, kind, gfx, items, hover: None, zoom, dpi, size: (wpx as u32, hpx as u32), fade: if motion_enabled() { Some((std::time::Instant::now(), target)) } else { None }, alpha: if motion_enabled() { 0 } else { 255 }, exit_alpha: 255, exiting: false, drag: None, hold: None, scroll: 0.0 })
         }
     }
 
@@ -402,6 +467,7 @@ impl Menu {
         match part { Some(Part::Row(i)) => match self.items.get(i) { Some(Item::Download(d)) if d.done => Some(MenuCmd::PreviewDownload(d.id)), _ => None }, _ => None }
     }
     pub fn keyboard(&mut self, key: u32) -> Option<MenuCmd> {
+        if key==0x27{if let Some(MenuCmd::Category(category))=self.hover.and_then(|p|self.command(p)){return Some(MenuCmd::Category(category))}}
         let parts: Vec<Part> = self.items.iter().enumerate().flat_map(|(i, item)| match item {
             Item::Translation { .. } => vec![Part::TranslationSource, Part::TranslationTarget, Part::TranslationOptions, Part::TranslationClose],
             Item::Action { enabled: true, .. } => vec![Part::Row(i)],
@@ -516,6 +582,7 @@ impl Menu {
     }
 
     pub fn paint(&mut self) {
+        self.refresh_accessibility();
         let (w, h) = self.size;
         if !self.gfx.begin(self.hwnd, w, h) {
             return;

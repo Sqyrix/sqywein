@@ -40,7 +40,7 @@ async function sample(name,exe,round,url){
   env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=`--remote-debugging-port=${port} --remote-debugging-address=127.0.0.1`;
   args=[url];
  }else args=[`--user-data-dir=${profile}`,'--no-first-run','--no-default-browser-check','--disable-extensions',`--remote-debugging-port=${port}`,'--window-size=1200,850',url];
- const child=spawn(exe,args,{env,windowsHide:false,stdio:'ignore'});let browser,browserId=child.pid;
+ const launched=Date.now();const child=spawn(exe,args,{env,windowsHide:false,stdio:'ignore'});let browser,browserId=child.pid;
  try{
   let connected=false;
   for(let i=0;i<200;i++){try{const r=await fetch(`http://127.0.0.1:${port}/json/version`);if(r.ok){connected=true;break}}catch{}await delay(100)}
@@ -55,18 +55,21 @@ async function sample(name,exe,round,url){
   const context=browser.contexts()[0];let page;
   for(let i=0;i<100;i++){page=context.pages().find(p=>p.url()===url);if(page)break;await delay(100)}
   if(!page)throw Error('Fixture tab missing');
-  await page.waitForFunction(()=>window.ready===true);
+  await page.waitForFunction(()=>window.ready===true);const launchMs=Date.now()-launched;
   await run('powershell.exe',['-NoProfile','-Command',`$ErrorActionPreference='Stop'; Add-Type -Name BenchWindow -Namespace Native -MemberDefinition '[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool SetWindowPos(System.IntPtr h, System.IntPtr after, int x, int y, int cx, int cy, uint flags); [System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool IsWindowVisible(System.IntPtr h);'; $w=(Get-Process -Id ${browserId}).MainWindowHandle; if($w -eq 0 -or ![Native.BenchWindow]::IsWindowVisible($w)){throw 'Browser window is not visible'}; if(![Native.BenchWindow]::SetWindowPos($w,0,40,40,1200,850,0x0040)){throw 'Window resize failed'}`],{windowsHide:true});
   const cdp=await context.newCDPSession(page);
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:1100,height:700,deviceScaleFactor:1,mobile:false});
   if(await page.locator('article').count()!==150)throw Error('Incomplete fixture');
   await page.bringToFront();await delay(5000);
   const idle=await measure(browserId);
+  // Akıcılık: iş yükü sırasında her karenin süresi (requestAnimationFrame aralığı).
+  await page.evaluate(()=>{window.frames_=[];let last=performance.now();const tick=t=>{window.frames_.push(t-last);last=t;if(window.recording)requestAnimationFrame(tick)};window.recording=true;requestAnimationFrame(tick);});
   await page.evaluate(()=>window.startWork());const active=await measure(browserId);
-  const ticks=await page.evaluate(()=>{window.stopWork();return window.ticks});
+  const ticks=await page.evaluate(()=>{window.stopWork();window.recording=false;return window.ticks});
+  const frames=await page.evaluate(()=>{const f=window.frames_.slice(5).sort((a,b)=>a-b);const at=q=>f[Math.min(f.length-1,Math.floor(f.length*q))];const total=f.reduce((a,b)=>a+b,0);return {fps:+(1000*f.length/total).toFixed(1),p50:+at(.5).toFixed(2),p95:+at(.95).toFixed(2),jank:+(100*f.filter(x=>x>25).length/f.length).toFixed(2)}});
   if(ticks<seconds*5)throw Error(name+' did not complete the workload');
-  const result={name,round,version:browser.version(),viewport:{width:1100,height:700},ticks,idle,active};
-  console.log(JSON.stringify({name,round,idleMB:idle.TotalMB,activeMB:active.TotalMB,idleCpu:idle.CpuPercent,activeCpu:active.CpuPercent,ticks}));return result;
+  const result={name,round,version:browser.version(),viewport:{width:1100,height:700},ticks,launchMs,frames,idle,active};
+  console.log(JSON.stringify({name,round,launchMs,...frames,idleMB:idle.TotalMB,activeMB:active.TotalMB,idleCpu:idle.CpuPercent,activeCpu:active.CpuPercent,ticks}));return result;
  }finally{
   if(browser)await browser.close().catch(()=>{});
   await run('taskkill.exe',['/PID',String(browserId),'/T','/F'],{windowsHide:true}).catch(()=>{});
@@ -82,7 +85,7 @@ async function sample(name,exe,round,url){
    fs.writeFileSync(path.join(out,'results.json'),JSON.stringify({description:'Visible local feed, clean profiles, no extensions, adblock off; total descendant private working set; CPU normalized to all logical processors. Not a live Instagram benchmark.',missing:browsers.filter(b=>!available.includes(b)).map(b=>b[0]),results},null,2));
   }
   const median=values=>{const v=values.sort((a,b)=>a-b);return v[Math.floor(v.length/2)]};
-  const summary=available.map(([name])=>{const rows=results.filter(r=>r.name===name);return {name,rounds:rows.length,idleMB:median(rows.map(r=>r.idle.TotalMB)),activeMB:median(rows.map(r=>r.active.TotalMB)),idleCpu:median(rows.map(r=>r.idle.CpuPercent)),activeCpu:median(rows.map(r=>r.active.CpuPercent))}});
+  const summary=available.map(([name])=>{const rows=results.filter(r=>r.name===name);return {name,rounds:rows.length,idleMB:median(rows.map(r=>r.idle.TotalMB)),activeMB:median(rows.map(r=>r.active.TotalMB)),idleCpu:median(rows.map(r=>r.idle.CpuPercent)),activeCpu:median(rows.map(r=>r.active.CpuPercent)),launchMs:median(rows.map(r=>r.launchMs)),fps:median(rows.map(r=>r.frames.fps)),p95FrameMs:median(rows.map(r=>r.frames.p95)),jankPercent:median(rows.map(r=>r.frames.jank))}});
   fs.writeFileSync(path.join(out,'summary.json'),JSON.stringify(summary,null,2));console.log('MEDIANS',JSON.stringify(summary));console.log('Report:',out);
  }finally{await new Promise(resolve=>server.close(resolve))}
 })().catch(e=>{console.error(e);process.exitCode=1;server.close()});

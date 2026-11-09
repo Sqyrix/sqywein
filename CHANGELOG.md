@@ -2,6 +2,37 @@
 
 Sqywein'in sürümden sürüme yenilikleri. En yenisi en üstte.
 
+## 0.5.0
+
+### Safari menüleri ve çoklu pencere
+- Ana menü Safari'nin menü çubuğuna göre yeniden kuruldu: üstte Yeni sekme / Yeni pencere / Yeni gizli pencere, altında **Dosya, Düzen, Görünüm, Geçmiş, Yer İşaretleri, Geliştir, Pencere, Yardım** alt menüleri. Alt menüler aynı panelde açılır, "‹ Geri" ile dönülür.
+- **Yeni pencere (Ctrl+N)** ve **yeni gizli pencere (Ctrl+Shift+N)**. Her pencere kendi sekmelerini tutar; ayarlar, yer işaretleri, geçmiş ve şifreler pencereler arasında çakışmadan birleştirilir. "Sqywein'den çık" bütün pencereleri kapatır.
+- **Okuyucu (Ctrl+Shift+R):** makalenin metnini reklamsız, sade ve okunaklı bir görünümde açar; Esc ile kapanır.
+- **Okuma Listesi (Ctrl+Shift+D):** sayfayı sonra okumak üzere kaydet; Yer İşaretleri menüsünden aç veya kaldır.
+- **Farklı kaydet (Ctrl+S)**, **Sayfa kaynağı (Ctrl+U)**, **Tam ekran (F11)**, **Tüm sekmeleri yer işaretlerine ekle**, Geçmiş menüsünde son ziyaret edilen siteler, Düzen menüsünde Geri al / Kes / Kopyala / Yapıştır / Tümünü seç.
+- Safari'de olmayan menü öğeleri kaldırıldı (ağ giriş sayfası, başka tarayıcıda aç, gizli ↔ normal geçişi ve hızlı erişim menüden çıktı; kısayolları çalışmaya devam eder).
+
+### Otomatik doldurma
+- Kullanıcı adı alanı tespiti yeniden yazıldı: `autocomplete`, alan türü, etiket/aria adı/yer tutucu birlikte puanlanır. T.C. kimlik (sayı alanı), telefon ve müşteri numarasıyla girişler tanınır; arama kutuları, doğrulama kodu, kupon ve kart alanları atlanır.
+- Açık Shadow DOM içindeki girişler (web bileşenli iki adımlı girişler) bulunur; tek kayıtlı hesap varsa yalnızca kullanıcı adı hemen yazılır, şifre her zaman seçip Windows Hello ile onaylayınca dolar.
+- Bülten, iletişim ve kayıt formlarındaki e-posta alanları artık giriş sanılmaz.
+
+## 0.4.5
+
+- Sekme/ayar ve geçmiş dosyaları da DPAPI ile şifrelenir. Eski kayıtlar otomatik taşınır; dosya/profil bağı, diske kalıcı atomik yazım ve şifreli son sağlam yedek eklenir. Bozuk kayıt ve yedek çözülemiyorsa üzerine yazılmaz.
+- Oturum kaydırma konumu kaydedilir ve yeniden açılışta geri getirilir. Geri/ileri geçmişi bulunan sekmeler bellekten atılmak yerine dondurulur. Gizli sekmelerin konumları diske yazılmaz.
+- Site bilgi paneli bağlantı/sertifika ayrıntılarını, site izinlerini ve siteye özel veri temizlemeyi birleştirir. Adres alanındaki simgeden veya Alt+I ile açılır.
+- Özel sekme/araç çubuğu ve menü düğmeleri Windows UI Automation üzerinden erişilebilir. Sayfanın kendi erişilebilirlik ağacı korunur; F6/Shift+F6, oklar, Tab ve Enter ile kabuk kullanılabilir. Windows yüksek kontrast renkleri izlenir.
+- Pilde cam efekti durur ve kabuk animasyonları 30 FPS hedefiyle çalışır. Pasif/küçültülmüş pencerede bakım uyanmaları seyrekleşir; çeviri taraması yalnızca etkin/görünür sekmede yapılır. Çağrı, video ve indirme korumaları korunur.
+- Host nesneleri kapatılır; iç sayfa mesajlarında güncel kaynak adresi tekrar doğrulanır. Şifre doldurma etkin sekmeye bağlanır; farklı kökene ait şifre için Hello doğrulaması yeniden istenir. Debug kayıtlarında URL yolu/sorgusu/fragmenti ve URL kullanıcı bilgileri tutulmaz.
+
+## 0.4.4
+
+- Pasif pencerede Windows'un beyaz sistem çerçevesi çizmesi engellenir; cam yerine opak tema zemini ve temayla uyumlu kenar rengi kullanılır.
+- Büyütme, görev çubuğunu dışarıda bırakan monitör çalışma alanıyla sınırlandırılır; yan/üst görev çubukları ve ikinci ekran desteklenir.
+- Sekme yükleme halkası adres alanıyla aynı mavi rengi kullanır.
+- Site izinleri adres alanına bağlı native panelden verilir/engellenir. Bildirim, kamera, mikrofon, konum ve pano istekleri desteklenir; gezinme/sekme değişmesi bekleyen isteği iptal eder. Gizli sekmede kalıcı izin yazılmaz.
+
 ## 0.4.3
 
 - Windows’un başlık bölgesini yeniden eklemesi başlangıçta ve tam ekrandan dönüşte engellendi. Yeniden boyutlandırma, küçültme ve büyütme korunur.

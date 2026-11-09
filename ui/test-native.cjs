@@ -12,6 +12,7 @@ function check(value,label){assert.ok(value,label);checks++;}
 (async()=>{
  const authServer=http.createServer((req,res)=>{
   res.setHeader('Content-Type','text/html');
+  if(req.url==='/notify') {res.end('<button id=notify onclick="Notification.requestPermission().then(p=>document.body.dataset.permission=p)">Enable notifications</button>');return;}
   if(req.url==='/finish')res.end('<button id="complete" onclick="window.opener.postMessage(\'oauth-complete\',location.origin);window.close()">Complete</button>');
   else res.end('<title>Sqywein QA</title><button id="login" onclick="window.authWindow=window.open(\'/finish\',\'oauth-login\',\'popup,width=450,height=500\')">Login</button><button id="blank-login" onclick="const child=window.authWindow=window.open(\'about:blank\',\'blank-login\');child.location.href=\'/finish\'">Blank login</button><script>addEventListener(\'message\',e=>{if(e.origin===location.origin)document.body.dataset.result=e.data})<\/script>');
  });
@@ -45,7 +46,7 @@ function check(value,label){assert.ok(value,label);checks++;}
   const again=await rpc('bookmarks.import',{items:[{title:'Example',url:'https://example.com'}]});check(again.added===0,'native import deduplicates bookmarks');
   const cleared=await rpc('data.clear',{kinds:['cookies']});check(cleared.ok,'native browsing data clear completes');
   await delay(5500);
-  const saved=JSON.parse(fs.readFileSync(path.join(data,'state.json'),'utf8'));check(saved.Settings.neverSleep.length===2,'native settings reach disk');check(saved.Favorites.length===1,'native bookmarks reach disk');
+  const saved=require('./qa-storage.cjs').readJson(path.join(data,'state.json'));check(saved.Settings.neverSleep.length===2,'native settings reach disk');check(saved.Favorites.length===1,'native bookmarks reach disk');
   check(saved.Tabs.length===1 && saved.Tabs[0].Url.includes('settings.html'),'native restart flag does not create extra saved tab');
   await page.screenshot({path:path.join(data,'settings-native.png'),fullPage:true});
   await page.locator('[data-setting=animations]').click();
@@ -60,6 +61,15 @@ function check(value,label){assert.ok(value,label);checks++;}
    await page.waitForFunction(d=>matchMedia('(prefers-color-scheme: dark)').matches===d.dark,appearance);
    check(await page.evaluate(()=>matchMedia('(prefers-color-scheme: dark)').matches)===appearance.dark,'WebView2 profile color scheme: '+theme);
    await page.screenshot({path:path.join(data,'theme-'+theme+'.png'),fullPage:true});
+  }
+  const choosePermission=allow=>{
+    const code=`Add-Type -TypeDefinition 'using System;using System.Text;using System.Runtime.InteropServices;public class SqyPermission{delegate bool E(IntPtr h,IntPtr l);[DllImport("user32.dll")]static extern bool EnumWindows(E e,IntPtr l);[DllImport("user32.dll")]static extern uint GetWindowThreadProcessId(IntPtr h,out uint p);[DllImport("user32.dll",CharSet=CharSet.Unicode)]static extern int GetClassNameW(IntPtr h,StringBuilder b,int n);[DllImport("user32.dll")]static extern uint GetDpiForWindow(IntPtr h);[DllImport("user32.dll")]static extern IntPtr SendMessageW(IntPtr h,uint m,IntPtr w,IntPtr l);public static bool Choose(uint pid,int row){bool found=false;EnumWindows((h,l)=>{uint p;GetWindowThreadProcessId(h,out p);var b=new StringBuilder(80);GetClassNameW(h,b,80);if(p==pid&&b.ToString()=="SqyweinMenu"){double s=GetDpiForWindow(h)/96.0;int x=(int)(180*s),y=(int)((95+34*row)*s);SendMessageW(h,0x202,IntPtr.Zero,new IntPtr(x|(y<<16)));found=true;return false;}return true;},IntPtr.Zero);return found;}}';[SqyPermission]::Choose(${child.pid},${allow?0:1})`;
+    return execFileSync('powershell.exe',['-NoProfile','-EncodedCommand',Buffer.from(code,'utf16le').toString('base64')],{windowsHide:true,encoding:'utf8'}).trim()==='True';
+  };
+  for(const [host,allow] of [[authBase,false],[authBase.replace('127.0.0.1','localhost'),true]]){
+    const ready=context.waitForEvent('page');await page.evaluate(url=>send('open',{url,newTab:true}),host+'/notify');const notificationPage=await ready;await notificationPage.waitForURL(host+'/notify');await notificationPage.locator('#notify').click();await delay(350);
+    check(choosePermission(allow),'notification panel '+host+' state='+await notificationPage.evaluate(()=>Notification.permission)+' result='+await notificationPage.evaluate(()=>document.body.dataset.permission));
+    await notificationPage.waitForFunction(()=>document.body.dataset.permission);check(await notificationPage.evaluate(()=>document.body.dataset.permission)===(allow?'granted':'denied'),'native permission choice resolves Notification API');
   }
   const openerReady=context.waitForEvent('page');
   await page.evaluate(url=>send('open',{url,newTab:true}),authBase+'/opener');

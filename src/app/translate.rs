@@ -281,7 +281,7 @@ impl App {
             engine::execute(view, &init);
             engine::run_script(view, tab.id, &script_for(tab, COLLECT));
         }
-        unsafe { SetTimer(Some(self.hwnd), TIMER_TRANSLATE, 1500, None) };
+        self.sync_translation_timer();
     }
     pub(super) fn toggle_translate(&mut self) {
         if self.tabs[self.active].translated { self.restore_translation(self.active); self.tabs[self.active].tr_declined = true; }
@@ -396,14 +396,22 @@ impl App {
 
     /// Çevrilmiş sekmede sonradan gelen içeriği de topla.
     pub(super) fn translate_tick(&mut self) {
-        let any = self.tabs.iter().any(|t| t.translated);
+        if !self.translation_polling_needed() { self.sync_translation_timer(); return; }
         if let Some(tab) = self.tabs.get_mut(self.active) {
             if tab.translated && tab.tr_pending == 0 && !tab.tr_collecting && !tab.tr_error && tab.mem == Mem::Awake && !tab.loading {
                 if let Some(view) = &tab.view { tab.tr_collecting = true; engine::run_script(view, tab.id, &script_for(tab, COLLECT)); }
             }
         }
-        if !any {
-            unsafe { let _ = KillTimer(Some(self.hwnd), TIMER_TRANSLATE); }
+    }
+
+    fn translation_polling_needed(&self) -> bool {
+        self.app_active && !unsafe { IsIconic(self.hwnd) }.as_bool() && self.tabs.get(self.active).is_some_and(|t| t.translated && !t.tr_error && t.mem==Mem::Awake)
+    }
+
+    pub(super) fn sync_translation_timer(&self) {
+        unsafe {
+            if self.translation_polling_needed() { SetTimer(Some(self.hwnd),TIMER_TRANSLATE,if self.energy_saver {3000}else{1500},None); }
+            else { let _=KillTimer(Some(self.hwnd),TIMER_TRANSLATE); }
         }
     }
 
