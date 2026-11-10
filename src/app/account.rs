@@ -11,7 +11,7 @@ use serde_json::Value;
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
 
 const LIST_ACCOUNTS: &str = "https://accounts.google.com/ListAccounts?gpsia=1&source=ChromiumBrowser&json=standard";
-const PROFILE_COLORS: [&str; 6] = ["#AF85FC", "#5BC0EB", "#F4A259", "#7BD389", "#F25F5C", "#E4C1F9"];
+const PROFILE_COLORS: [&str; 1] = ["#0A84FF"];
 
 /// Hesap listesinden ilk açık hesap: (ad, e-posta, fotoğraf adresi).
 pub(super) fn parse_list_accounts(text: &str) -> Option<(String, String, String)> {

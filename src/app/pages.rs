@@ -337,7 +337,7 @@ impl App {
             "searchSuggestions" => st.search_suggestions = b,
             "autoUpdate" => st.auto_update = b,
             "accent" => {
-                st.accent = text;
+                st.accent = "blue".into();
                 set_accent(&st.accent);
                 self.refresh_theme();
             }

@@ -47,6 +47,9 @@
 
 > Sürümden sürüme yenilikler: [CHANGELOG.md](CHANGELOG.md)
 
+### 0.5.2: yalnızca mavi vurgu
+Eski mor ve diğer vurgu seçimleri maviye taşınır. Adres alanı, ayarlar, menüler, profiller, otomatik doldurma ve Sqywein teması aynı mavi renk düzenini kullanır; tarama verileri korunur.
+
 ### 0.5.1 ile gelenler
 - **Yeni pencere düzeni:** sol üstte kapat/küçült/büyüt düğmeleri, kenar çubuğu, ortalanmış oval adres alanı; sağda paylaşım, yeni sekme ve sekmelere genel bakış. Büyütme görev çubuğunu korur; tam ekran ayrı olarak **F11** ile açılır.
 - **Kademeli tarayıcı menüsü:** yeni sekme ve pencere, şifreler, geçmiş, indirmeler, yer işaretleri, veri temizleme, yakınlaştırma, yazdırma, kaydetme/paylaşım, bulma/düzenleme, çeviri, araçlar, ayarlar ve yardım. Alt menüler yan yana açılır; fare, klavye ve ekran okuyucuyla kullanılabilir.
@@ -67,7 +70,7 @@
 - **Cam efekti:** Araç çubuğu, sekmeler, menüler ve başlangıç sayfası Windows 11'in bulanık camıyla (Acrylic) yarı saydam. Pilde kendiliğinden kapanır, Ayarlar'dan tamamen kapatılabilir.
 - **Akıllı adres alanı:** Yazmıyorken yalnızca site adını gösterir. Yazarken geçmiş, yer işaretleri, açık sekmeler, komutlar ("geçmiş", "indirmeler"…) ve arama önerileri tek listede.
 - **Başlangıç sayfası:** Favoriler (en az 10 kez girdiğin siteler kendiliğinden eklenir), havaya göre şekillenen hava durumu kartı ve döviz kartı.
-- **Dört tema** (Sistem, Açık, Koyu, Sqywein moru) ve altı vurgu rengi. Yazılar menülerde ClearType, camda gri tonlamalı yumuşatma ile çizilir.
+- **Dört tema** (Sistem, Açık, Koyu, Sqywein koyu mavisi) ve tüm arayüzde mavi vurgu. Yazılar menülerde ClearType, camda gri tonlamalı yumuşatma ile çizilir.
 - **Erişilebilirlik:** Windows UI Automation (ekran okuyucular), **F6/Shift+F6** ile araç çubuğu ↔ sekmeler ↔ sayfa, yüksek kontrast desteği.
 
 ### Gizlilik ve güvenlik

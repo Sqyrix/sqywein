@@ -4,7 +4,7 @@ pub type Rgb = u32;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Palette { pub base: Rgb, pub raised: Rgb, pub hover: Rgb, pub line: Rgb, pub ink: Rgb, pub muted: Rgb, pub faint: Rgb, pub field: Rgb, pub danger: Rgb }
-const SQYWEIN: Palette = Palette {base:0x14121C,raised:0x211D2E,hover:0x2E2940,line:0x3D3654,ink:0xF4F1FC,muted:0xB8AED0,faint:0x8E84A8,field:0x2A2540,danger:0xFF857C};
+const SQYWEIN: Palette = Palette {base:0x101923,raised:0x192737,hover:0x24384C,line:0x36516B,ink:0xF1F6FC,muted:0xB0C2D4,faint:0x9AAFC4,field:0x21344A,danger:0xFF857C};
 const DARK: Palette = Palette {base:0x1C1C1E,raised:0x2C2C2E,hover:0x3A3A3C,line:0x48484A,ink:0xF5F5F7,muted:0xAEAEB2,faint:0x98989D,field:0x3A3A3C,danger:0xFF6961};
 const LIGHT: Palette = Palette {base:0xF5F5F7,raised:0xFFFFFF,hover:0xE5E5EA,line:0xD1D1D6,ink:0x1D1D1F,muted:0x515154,faint:0x6E6E73,field:0xE8E8ED,danger:0xB42318};
 thread_local! {
@@ -57,18 +57,11 @@ pub fn css() -> String {
     if let Some(colors)=msg["colors"].as_object(){for(k,v)in colors{if let Some(v)=v.as_str(){css.push_str(&format!("--{k}:{v};"));}}}
     css.push_str(&format!("--accent:{};}}",hex(accent())));css
 }
-/// Sqywein'in varsayılan vurgu rengi (mor).
-pub const DEFAULT_ACCENT: Rgb = 0xAF85FC;
+/// Sqywein'in varsayılan vurgu rengi (mavi).
+pub const DEFAULT_ACCENT: Rgb = 0x0A84FF;
 
 /// Seçilebilir vurgu renkleri: (ayar adı, görünen ad, renk).
-pub const ACCENTS: [(&str, &str, Rgb); 6] = [
-    ("purple", "Mor", 0xAF85FC),
-    ("blue", "Mavi", 0x0A84FF),
-    ("green", "Yeşil", 0x5FD39A),
-    ("orange", "Turuncu", 0xFFA45C),
-    ("pink", "Pembe", 0xF28AC9),
-    ("teal", "Turkuaz", 0x4FD1D9),
-];
+pub const ACCENTS: [(&str, &str, Rgb); 1] = [("blue", "Mavi", 0x0A84FF)];
 
 thread_local! {
     static CURRENT_ACCENT: std::cell::Cell<Rgb> = const { std::cell::Cell::new(DEFAULT_ACCENT) };
@@ -87,10 +80,10 @@ pub fn set_motion(enabled: bool) {
 pub fn accent() -> Rgb {
     let raw=CURRENT_ACCENT.with(|c| c.get());
     if is_dark(){return raw;}
-    match raw {0x0A84FF=>0x0066CC,0x5FD39A=>0x137A48,0xFFA45C=>0xAA4E00,0xF28AC9=>0xAA2D75,0x4FD1D9=>0x007878,_=>0x6D36C9}
+    0x0066CC
 }
 
-/// Ayar adından ("blue" vb.) vurgu rengini uygular; bilinmeyen ad mor olur.
+/// Ayar adından ("blue" vb.) vurgu rengini uygular; eski veya bilinmeyen ad mavi olur.
 pub fn set_accent(name: &str) {
     let rgb = ACCENTS.iter().find(|(n, ..)| *n == name).map_or(DEFAULT_ACCENT, |(_, _, c)| *c);
     CURRENT_ACCENT.with(|c| c.set(rgb));
@@ -189,6 +182,16 @@ mod tests {
         0.2126*linear(c>>16)+0.7152*linear((c>>8)&255)+0.0722*linear(c&255)
     }
     fn contrast(a:Rgb,b:Rgb)->f64 {let(a,b)=(luminance(a),luminance(b));(a.max(b)+0.05)/(a.min(b)+0.05)}
+    #[test]
+    fn legacy_accent_names_resolve_to_blue_in_every_theme() {
+        for theme in ["light","dark","sqywein"] {
+            set_theme(theme);
+            for name in ["blue","purple","pink","green","unknown"] {
+                set_accent(name);
+                assert_eq!(accent(),if is_dark(){0x0A84FF}else{0x0066CC});
+            }
+        }
+    }
     #[test]
     fn themes_have_readable_text_and_system_only_resolves_neutral_palettes() {
         assert_eq!(resolve("system",true).base,LIGHT.base);

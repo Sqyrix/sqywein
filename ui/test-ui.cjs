@@ -76,6 +76,8 @@ async function main(){
     }
     await page.setViewportSize({width:1280,height:900});await goto('settings');
     check(await page.locator('#theme option').allTextContents().then(v=>v.join('|'))==='Açık|Koyu|Sqywein|Sistem','four named theme choices');
+    check(await page.locator('#accent option').allTextContents().then(v=>v.join('|'))==='Mavi','only blue accent is offered');
+    check(await page.locator('#accent').isDisabled(),'fixed accent cannot restore a legacy purple selection');
     await page.emulateMedia({colorScheme:'light'});await page.locator('#theme').selectOption('system');
     await page.waitForFunction(()=>document.documentElement.style.colorScheme==='light');
     await page.emulateMedia({colorScheme:'dark'});await page.waitForFunction(()=>document.documentElement.style.colorScheme==='dark');

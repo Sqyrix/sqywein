@@ -2,6 +2,11 @@
 
 Sqywein'in sürümden sürüme yenilikleri. En yenisi en üstte.
 
+## 0.5.2
+
+- Arayüzde tek vurgu rengi mavi oldu; eski renk seçimleri veri kaybı olmadan maviye taşınır.
+- Sqywein teması, profil simgeleri ve otomatik doldurma dahil mor zemin/vurgular kaldırıldı.
+
 ## 0.5.1
 
 - Eski oturum kayıtlarındaki `SessionClean: null` ve `ReadingList: null` değerleri için veri kaybetmeden okuma ve kayıt normalleştirme. Şifreli yedekleri koruyan `--repair-session` denetimi.

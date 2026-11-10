@@ -6,7 +6,7 @@ const root=path.join(__dirname,'..');
 const exe=process.env.SQYWEIN_TEST_EXE || path.join(root,'target/release/sqywein.exe');
 const data=path.join(__dirname,'.qa',`native-${Date.now()}`);
 fs.mkdirSync(data,{recursive:true});
-fs.writeFileSync(path.join(data,'state.json'),JSON.stringify({DefaultPromptSeen:true,CurrentProfile:'default',Settings:{adblock:false,autoUpdate:false,searchSuggestions:false,privacyShield:true}}));
+fs.writeFileSync(path.join(data,'state.json'),JSON.stringify({DefaultPromptSeen:true,CurrentProfile:'default',Settings:{accent:"purple",adblock:false,autoUpdate:false,searchSuggestions:false,privacyShield:true}}));
 const delay=ms=>new Promise(r=>setTimeout(r,ms));let checks=0;
 function check(value,label){assert.ok(value,label);checks++;}
 (async()=>{
@@ -57,6 +57,8 @@ function check(value,label){assert.ok(value,label);checks++;}
    await page.locator('#theme').selectOption(theme);
    settings=await rpc('settings.get');check(settings.settings.theme===theme,'native theme preference: '+theme);
    const appearance=await page.evaluate(()=>new Promise(resolve=>{const off=on('theme',d=>{off();resolve(d)});send('theme.get')}));
+   check(appearance.accent===(appearance.dark?'#0A84FF':'#0066CC'),'blue-only native accent in '+theme);
+   check(settings.settings.accent==='blue','legacy accent migrated in '+theme);
    await page.waitForFunction(d=>document.documentElement.style.getPropertyValue('--base')===d.colors.base,appearance);
    await page.waitForFunction(d=>matchMedia('(prefers-color-scheme: dark)').matches===d.dark,appearance);
    check(await page.evaluate(()=>matchMedia('(prefers-color-scheme: dark)').matches)===appearance.dark,'WebView2 profile color scheme: '+theme);

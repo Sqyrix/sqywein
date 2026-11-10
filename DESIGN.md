@@ -9,6 +9,6 @@ Tarayıcı, masaüstünde görev tamamlama yüzeyidir. Görsel referans kullanı
 - Normal başlangıç sayfasında tek arama noktası adres alanıdır; ortada favoriler ve sağ altta Düzenle vardır. Hava/döviz kartları mevcut kullanıcı ayarına bağlıdır.
 - Sekme genel bakışı içerik alanını doldurur; başlık ve kapatma düğmesi bulunan önizlemeler, filtre ve yeni sekme kutusu içerir. Önizlemeler yalnızca istendiğinde alınır.
 - DirectWrite: 13 DIP ana arayüz, 12 DIP yardımcı metin; fiziksel piksele hizalama. Opak yüzeylerde sistem ClearType parametreleri, gerçek saydam camda gri tonlama. MSAA metin rasterleştirmesinin yerine kullanılmaz.
-- Sistem, açık, koyu ve Sqywein temaları korunur. Klavye odağı görünür olmalı; UI Automation ve azaltılmış hareket desteklenmelidir.
+- Sistem, açık, koyu ve koyu mavi Sqywein temaları korunur. Bütün yüzeylerde tek vurgu rengi mavidir; eski renk tercihleri maviye taşınır. Klavye odağı görünür olmalı; UI Automation ve azaltılmış hareket desteklenmelidir.
 
 README görüntüleri gerçek uygulama penceresidir: açık temada Sqywein deposu, koyu temada Rust sitesi. Maket veya yapay üretilmiş tarayıcı görünümü kullanılmaz.

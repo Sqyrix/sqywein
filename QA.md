@@ -1,3 +1,12 @@
+# 0.5.2 renk güncellemesi — 11 Kasım 2026
+
+- 66 Rust testi başarılı; 7 ortama bağlı test atlandı. Eski renklerin maviye taşınması ve profil/sekmelerin korunması regresyonları dahil.
+- Clippy bütün hedeflerde uyarısız. İç sayfa paketi 203, gerçek WebView2 paketi 43 ve güvenlik paketi 29 kontrol geçti.
+- Dört temanın tamamında motorun bildirdiği vurgu rengi mavi; ayarlar yalnızca Mavi seçeneğini sunuyor. Sqywein zeminleri ve otomatik doldurma geri dönüş renkleri de mavi tonlarında.
+- Kaynaklardaki mor renk taramasında yalnızca eski kayıt dönüşümünü sınayan test verisi kaldı.
+- Yerel kurulumdan önce şifreli kayıtlar yedeklendi. Şifre kasası, geçmiş ve oturum dosyaları kurulum/renk taşıma sonrasında bayt düzeyinde aynı kaldı.
+- Tasarım denetleyicisinin ayar satırı uyarısı gerçek tarayıcıdaki hesaplanmış stillerle incelendi: 33 satırın hiçbirinde görünür alt kenarlık ile yetersiz boşluk yok. Yükleme çubuğu kayan içerik değildir; iki yanlış pozitif yalnızca settings.html için gerekçeli olarak kaydedildi.
+
 # 0.5.1 doğrulama — 10 Kasım 2026
 
 - Rust: 64 test başarılı, 7 isteğe bağlı/ortama bağlı test atlandı. Eski `SessionClean: null` ve `ReadingList: null` kayıtlarından sekme kaybetmeden yükleme regresyonu dahil.

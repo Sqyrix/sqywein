@@ -245,7 +245,7 @@ pub struct Menu {
 const FADE_MS: f32 = 160.0;
 const FADE_TIMER: usize = 1;
 
-/// Profil rengi "#AF85FC" → 0xAF85FC.
+/// Profil rengi "#0A84FF" → 0x0A84FF.
 pub fn parse_color(hex: &str) -> Rgb {
     u32::from_str_radix(hex.trim_start_matches('#'), 16).unwrap_or(accent())
 }
@@ -779,7 +779,7 @@ mod tests {
 
     #[test]
     fn renk_cozme() {
-        assert_eq!(parse_color("#AF85FC"), 0xAF85FC);
+        assert_eq!(parse_color("#0A84FF"), 0x0A84FF);
         assert_eq!(parse_color("bozuk"), accent());
     }
 }

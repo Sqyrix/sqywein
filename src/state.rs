@@ -64,7 +64,7 @@ pub struct Settings {
     pub adblock: bool,
     /// Varsayılan filtreleme modu: 0 Kapalı, 1 Temel, 2 İdeal, 3 Tam.
     pub adblock_level: u8,
-    /// Vurgu rengi: purple, blue, green, orange, pink, teal.
+    /// Tek vurgu rengi: blue; eski renkler yüklemede taşınır.
     pub accent: String,
     /// GitHub'dan otomatik güncelleme.
     pub auto_update: bool,
@@ -246,11 +246,16 @@ pub fn valid_profile(id: &str) -> bool {
 }
 
 impl AppState {
+    fn normalize_appearance(&mut self) {
+        self.settings.accent="blue".into();
+        for profile in &mut self.profiles {profile.color="#0A84FF".into();}
+    }
+
     /// Profil listesi boşsa varsayılan profili ekler.
     pub fn ensure_profiles(&mut self) {
         self.profiles.retain(|p| valid_profile(&p.id));
         if self.profiles.is_empty() {
-            self.profiles.push(Profile { id: DEFAULT_PROFILE.into(), name: "Kişisel".into(), color: "#AF85FC".into(), ..Default::default() });
+            self.profiles.push(Profile { id: DEFAULT_PROFILE.into(), name: "Kişisel".into(), color: "#0A84FF".into(), ..Default::default() });
         }
         if !self.profiles.iter().any(|p| p.id == self.current_profile) {
             self.current_profile = self.profiles[0].id.clone();
@@ -297,12 +302,14 @@ pub fn load() -> AppState {
     state.ensure_profiles();
     state.baseline=serde_json::to_value(&state).ok().and_then(|v|v.as_object().cloned()).unwrap_or_default();
     crate::windows_session::restore(&mut state);
+    state.normalize_appearance();
     state
 }
 
 pub fn save(state: &mut AppState) -> io::Result<()> {
     if state.storage_error.is_some() { return Err(io::Error::other("Okunamayan oturumun üzerine yazılmadı")); }
     let _lock=crate::storage::RecordLock::acquire(&state_path())?;
+    state.normalize_appearance();
     let ours=serde_json::to_value(&state)?;
     let mut latest:Value=match crate::storage::read_json(&state_path()){Ok(v)=>v,Err(e) if e.kind()==io::ErrorKind::NotFound=>Value::Object(Map::new()),Err(e)=>return Err(e)};
     let object=latest.as_object_mut().ok_or_else(||io::Error::other("Oturum biçimi geçersiz"))?;
@@ -312,6 +319,8 @@ pub fn save(state: &mut AppState) -> io::Result<()> {
         if object.get(key).is_some_and(Value::is_null) && !value.is_null(){object.insert(key.clone(),value.clone());}
         else if before!=value || !object.contains_key(key) {object.insert(key.clone(),merge_value(before,value,object.get(key).unwrap_or(&Value::Null)));}
     }
+    latest["Settings"]["accent"]=Value::String("blue".into());
+    if let Some(profiles)=latest["Profiles"].as_array_mut(){for profile in profiles{profile["Color"]=Value::String("#0A84FF".into());}}
     crate::windows_session::checkpoint(state)?;
     crate::storage::write_json(&state_path(),&latest)?;
     let mut current=latest;
@@ -343,6 +352,11 @@ fn merge_value(base:&Value,ours:&Value,theirs:&Value)->Value{
 
 #[cfg(test)]
 mod tests {
+    #[test] fn legacy_colors_migrate_without_changing_session_or_profile_identity(){
+        let mut state:AppState=serde_json::from_str(r##"{"Tabs":[{"Title":"Keep","Url":"https://example.invalid/keep"}],"CurrentProfile":"default","Profiles":[{"Id":"default","Name":"Keep profile","Color":"#AF85FC"}],"Settings":{"accent":"purple","theme":"dark"},"KeepUnknown":17}"##).unwrap();
+        let tabs=state.tabs[0].url.clone();state.normalize_appearance();
+        assert_eq!(state.settings.accent,"blue");assert_eq!(state.settings.theme,"dark");assert_eq!(state.tabs[0].url,tabs);assert_eq!(state.profiles[0].name,"Keep profile");assert_eq!(state.profiles[0].color,"#0A84FF");assert_eq!(state.extra["KeepUnknown"],17);
+    }
     #[test] fn legacy_null_session_marker_keeps_the_session(){
         let state:AppState=serde_json::from_str(r#"{"SessionClean":null,"ReadingList":null,"Tabs":[{"Title":"Keep","Url":"https://example.invalid/keep"}],"Settings":{"theme":"dark"}}"#).unwrap();
         assert!(!state.session_clean);assert_eq!(state.tabs.len(),1);assert_eq!(state.tabs[0].title,"Keep");assert_eq!(state.settings.theme,"dark");

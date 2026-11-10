@@ -11,6 +11,24 @@
         ],
         "createdAt": "2026-11-10T20:29:08.474Z",
         "reason": "Agent review: detection comes from the imported indeterminate loading progress indicator, not moving readable content. The overlay only has a finite 160 ms entrance animation; keyboard selection scrolls the chosen item into view on demand."
+      },
+      {
+        "rule": "cramped-padding",
+        "value": "*",
+        "files": [
+          "ui/settings.html"
+        ],
+        "createdAt": "2026-11-10T23:02:47.760Z",
+        "reason": "Agent verified computed styles in a real browser: all 33 settings rows have at least 8px bottom inset whenever a visible bottom border exists; last-child rows remove the border. Detector does not resolve that override."
+      },
+      {
+        "rule": "marquee",
+        "value": "*",
+        "files": [
+          "ui/settings.html"
+        ],
+        "createdAt": "2026-11-10T23:02:47.819Z",
+        "reason": "Agent review: imported indeterminate loading progress is a status indicator, not scrolling readable content; same intentional loading indicator as overlay.html."
       }
     ]
   }

@@ -409,7 +409,7 @@ impl App {
         for (k, rate) in rates.items.iter().enumerate() {
             let row = Rect::new(r.x + pad, r.y + 58.0 + k as f32 * 74.0, r.w - pad * 2.0, 66.0);
             if k > 0 { g.fill_alpha(Rect::new(row.x, row.y - 5.0, row.w, 1.0), line(), 0.6); }
-            let (symbol, badge, name) = match rate.code.as_str() { "USD" => ("$", 0x34C759, "Dolar"), "EUR" => ("€", 0x0A84FF, "Euro"), _ => ("£", 0xAF52DE, "Sterlin") };
+            let (symbol, badge, name) = match rate.code.as_str() { "USD" => ("$", 0x34C759, "Dolar"), "EUR" => ("€", 0x0A84FF, "Euro"), _ => ("£", 0x0A84FF, "Sterlin") };
             g.circle(row.x + 17.0, row.y + 22.0, 17.0, badge);
             g.text(symbol, Rect::new(row.x, row.y + 5.0, 34.0, 34.0), Font::UiBold, 0xFFFFFF, Align::Center);
             g.text(name, Rect::new(row.x + 44.0, row.y + 4.0, 90.0, 20.0), Font::UiBold, ink(), Align::Left);

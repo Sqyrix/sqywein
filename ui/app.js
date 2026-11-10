@@ -106,8 +106,8 @@ if (!bridge) {
     downloads:[{id:'d1',name:'sqywein-kilavuz.pdf',path:'C:\\Users\\Örnek\\Downloads\\sqywein-kilavuz.pdf',url:'https://example.com/kilavuz.pdf',status:'done',received:2516582,total:2516582,when:ago(0)},{id:'d2',name:'tatil-fotograflari.zip',path:'C:\\Users\\Örnek\\Downloads\\tatil-fotograflari.zip',url:'https://example.com/photos.zip',status:'progress',received:15728640,total:52428800,when:ago(0,1)},{id:'d3',name:'notlar.txt',path:'C:\\Users\\Örnek\\Downloads\\notlar.txt',url:'https://example.com/notes.txt',status:'failed',received:0,total:0,when:ago(1)}],
     bookmarks:[{title:'Rust programlama dili',url:'https://www.rust-lang.org/'},{title:'MDN Web Docs',url:'https://developer.mozilla.org/'},{title:'Vikipedi',url:'https://tr.wikipedia.org/'},{title:'Project Gutenberg',url:'https://www.gutenberg.org/'}],
     extensions:[{id:'e1',name:'uBlock Origin',enabled:true,pinned:true,icon:''},{id:'e2',name:'Dark Reader',enabled:false,pinned:false,icon:''}],
-    settings:{theme:'sqywein',accent:'purple',searchEngine:'google',startup:'restore',freezeTabs:true,sleepTabs:false,hardwareAcceleration:true,defaultZoom:0,savePasswords:true,autofill:true,tracking:'balanced'},
-    profiles:[{id:'p1',name:'Kişisel',email:'',color:'#AF85FC',current:true},{id:'p2',name:'İş',email:'ornek@example.com',color:'#8BBCC8',current:false}]
+    settings:{theme:'sqywein',accent:'blue',searchEngine:'google',startup:'restore',freezeTabs:true,sleepTabs:false,hardwareAcceleration:true,defaultZoom:0,savePasswords:true,autofill:true,tracking:'balanced'},
+    profiles:[{id:'p1',name:'Kişisel',email:'',color:'#0A84FF',current:true},{id:'p2',name:'İş',email:'ornek@example.com',color:'#8BBCC8',current:false}]
   };
   let historyQuery='';let historyLimit=500;let sequence=2;
   const reply=(type,payload) => receive(structuredClone({type,...payload}));
@@ -116,8 +116,8 @@ if (!bridge) {
   const themeGet=()=>{
     const name=state.settings.theme||'sqywein';const light=name==='light'||(name==='system'&&!matchMedia('(prefers-color-scheme: dark)').matches);
     const keys=['base','raised','hover','line','ink','muted','faint','field','danger'];
-    const values=light?['F5F6F8','FFFFFF','E9EBEF','C4C8D0','1C2027','4F5968','596473','E8EBF2','B42318']:name==='sqywein'?['14121C','211D2E','2E2940','3D3654','F4F1FC','B8AED0','8E84A8','2A2540','FF857C']:['151515','222222','303030','454545','F2F2F2','C0C0C0','9A9A9A','2B2B2B','FF857C'];
-    const accent=(light?{purple:'6D36C9',blue:'1C5ED4',green:'137A48',orange:'AA4E00',pink:'AA2D75',teal:'007878'}:{purple:'AF85FC',blue:'6EA8FE',green:'5FD39A',orange:'FFA45C',pink:'F28AC9',teal:'4FD1D9'})[state.settings.accent]||(light?'6D36C9':'AF85FC');
+    const values=light?['F5F6F8','FFFFFF','E9EBEF','C4C8D0','1C2027','4F5968','596473','E8EBF2','B42318']:name==='sqywein'?['101923','192737','24384C','36516B','F1F6FC','B0C2D4','9AAFC4','21344A','FF857C']:['151515','222222','303030','454545','F2F2F2','C0C0C0','9A9A9A','2B2B2B','FF857C'];
+    const accent=light?'0066CC':'0A84FF';
     reply('theme',{name,dark:!light,accent:'#'+accent,colors:Object.fromEntries(keys.map((k,i)=>[k,'#'+values[i]]))});
   };
   let passwordQuery='';let passwordSequence=2;
@@ -173,7 +173,7 @@ if (!bridge) {
       case 'theme.get':themeGet();break;
       case 'settings.set':state.settings[message.key]=message.value;if(['theme','accent'].includes(message.key))themeGet();break;
       case 'data.clear':if(message.kinds.includes('history'))state.history=[];reply(type,{kinds:message.kinds});break;
-      case 'profiles.add':state.profiles.push({id:`p${++sequence}`,name:message.name,email:'',color:'#AF85FC',current:false});settingsGet();break;
+      case 'profiles.add':state.profiles.push({id:`p${++sequence}`,name:message.name,email:'',color:'#0A84FF',current:false});settingsGet();break;
       case 'profiles.rename':{const profile=state.profiles.find(i => i.id===message.id);if(profile)profile.name=message.name;settingsGet();break;}
       case 'profiles.remove':state.profiles=state.profiles.filter(i => i.id!==message.id || i.current);settingsGet();break;
       case 'profiles.switch':state.profiles.forEach(i => {i.current=i.id===message.id;});settingsGet();break;
