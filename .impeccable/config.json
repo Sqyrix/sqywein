@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "marquee",
+        "value": "*",
+        "files": [
+          "ui/overlay.html"
+        ],
+        "createdAt": "2026-11-10T20:29:08.474Z",
+        "reason": "Agent review: detection comes from the imported indeterminate loading progress indicator, not moving readable content. The overlay only has a finite 160 ms entrance animation; keyboard selection scrolls the chosen item into view on demand."
+      }
+    ]
+  }
+}
