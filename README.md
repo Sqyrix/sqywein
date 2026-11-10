@@ -47,7 +47,7 @@
 
 > Sürümden sürüme yenilikler: [CHANGELOG.md](CHANGELOG.md)
 
-### 0.5.1 kaynak kodundaki yenilikler
+### 0.5.1 ile gelenler
 - **Yeni pencere düzeni:** sol üstte kapat/küçült/büyüt düğmeleri, kenar çubuğu, ortalanmış oval adres alanı; sağda paylaşım, yeni sekme ve sekmelere genel bakış. Büyütme görev çubuğunu korur; tam ekran ayrı olarak **F11** ile açılır.
 - **Kademeli tarayıcı menüsü:** yeni sekme ve pencere, şifreler, geçmiş, indirmeler, yer işaretleri, veri temizleme, yakınlaştırma, yazdırma, kaydetme/paylaşım, bulma/düzenleme, çeviri, araçlar, ayarlar ve yardım. Alt menüler yan yana açılır; fare, klavye ve ekran okuyucuyla kullanılabilir.
 - **Kenar çubuğu:** sekmelere, yer işaretlerine ve Okuma Listesine erişim; ek web görünümü oluşturmaz.
