@@ -60,6 +60,45 @@ impl Drop for PermissionRequest {
     } }
 }
 
+/// Keeps the runtime's exact context-menu commands alive until selection/dismissal.
+pub struct ContextEntry {
+    pub label:String,
+    pub command:i32,
+    pub enabled:bool,
+    pub checked:bool,
+    pub separator:bool,
+    pub children:Vec<ContextEntry>,
+}
+pub struct ContextRequest {
+    pub location:POINT,
+    pub entries:Vec<ContextEntry>,
+    args:ICoreWebView2ContextMenuRequestedEventArgs,
+    deferral:Option<ICoreWebView2Deferral>,
+}
+impl ContextRequest {
+    fn new(args:&ICoreWebView2ContextMenuRequestedEventArgs)->Result<Self>{
+        let entries=context_entries(&unsafe{args.MenuItems()?},0)?;
+        let mut location=POINT::default();unsafe{args.Location(&mut location)?;}
+        let deferral=unsafe{args.GetDeferral()?};
+        let mut request=Self{location,entries,args:args.clone(),deferral:Some(deferral)};
+        if let Err(error)=unsafe{args.SetHandled(true)}{if let Some(d)=request.deferral.take(){unsafe{let _=d.Complete();}}return Err(error);}
+        Ok(request)
+    }
+    pub fn select(mut self,command:i32){unsafe{let _=self.args.SetSelectedCommandId(command);if let Some(d)=self.deferral.take(){let _=d.Complete();}}}
+}
+impl Drop for ContextRequest{fn drop(&mut self){unsafe{if let Some(d)=self.deferral.take(){let _=self.args.SetSelectedCommandId(-1);let _=d.Complete();}}}}
+fn context_entries(collection:&ICoreWebView2ContextMenuItemCollection,depth:usize)->Result<Vec<ContextEntry>>{
+    if depth>8{return Ok(vec![]);}let mut count=0;unsafe{collection.Count(&mut count)?;}
+    let mut entries=Vec::new();for n in 0..count.min(100){unsafe{
+        let item=collection.GetValueAtIndex(n)?;let mut kind=COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_COMMAND;item.Kind(&mut kind)?;
+        let label=string(|p|item.Label(p)).replace("&&","\0").replace('&',"").replace('\0',"&");
+        let mut command=0;item.CommandId(&mut command)?;
+        let enabled=flag(|p|item.IsEnabled(p));let checked=flag(|p|item.IsChecked(p));
+        let children=if kind==COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_SUBMENU{context_entries(&item.Children()?,depth+1)?}else{vec![]};
+        entries.push(ContextEntry{label,command,enabled,checked,separator:kind==COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_SEPARATOR,children});
+    }}Ok(entries)
+}
+
 /// Registration completion is a barrier before attaching the new window.
 pub fn prepare_window(view: &ICoreWebView2, id: u32) {
     let handler = AddScriptToExecuteOnDocumentCreatedCompletedHandler::create(Box::new(move |result, _| {
@@ -71,6 +110,7 @@ pub fn prepare_window(view: &ICoreWebView2, id: u32) {
 pub enum Event {
     EnvReady(Option<ICoreWebView2Environment>),
     Permission(u32, Box<PermissionRequest>),
+    ContextMenu(u32,Box<ContextRequest>),
     ViewReady(u32, Option<ICoreWebView2Controller>),
     /// Ana çerçevede yeni gezinme başladı (hedef adres).
     NavStarting(u32, String),
@@ -584,11 +624,13 @@ fn configure_mode(ctrl: &ICoreWebView2Controller, id: u32, background: u32, pref
                 let target = args.ContextMenuTarget()?;
                 let mut kind = COREWEBVIEW2_CONTEXT_MENU_TARGET_KIND_PAGE;
                 target.Kind(&mut kind)?;
-                if kind != COREWEBVIEW2_CONTEXT_MENU_TARGET_KIND_IMAGE { return Ok(()); }
+                if kind == COREWEBVIEW2_CONTEXT_MENU_TARGET_KIND_IMAGE {
                 let item = env9.CreateContextMenuItem(w!("Canlı Metin: resimdeki yazıyı seç"), None, COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_COMMAND)?;
                 let mut token = 0;
                 item.add_CustomItemSelected(&CustomItemSelectedEventHandler::create(Box::new(move |_, _| { push(Event::OcrRequested(id)); Ok(()) })), &mut token)?;
                 args.MenuItems()?.InsertValueAtIndex(0, &item)?;
+                }
+                if let Ok(request)=ContextRequest::new(&args){push(Event::ContextMenu(id,Box::new(request)));}
                 Ok(())
             })), &mut token)?;
         }

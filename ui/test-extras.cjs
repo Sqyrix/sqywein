@@ -56,7 +56,7 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));let count=0;function check(valu
   check(await overlay.locator('.tile').count()>=2,'Mission Control contains open tabs');
   await overlay.waitForFunction(()=>document.querySelector('.thumbnail'),{timeout:10000});check(await overlay.locator('.thumbnail').count()>0,'Mission Control captures native WebView thumbnails');
   await overlay.locator('#query').fill('Utility fixture');check(await overlay.locator('.tile').count()===1,'typing filters the tab grid');
-  await overlay.screenshot({path:path.join(data,'tabs-native.png')});await dismiss(overlay,()=>overlay.locator('.tile').click());
+  await overlay.screenshot({path:path.join(data,'tabs-native.png')});await dismiss(overlay,()=>overlay.locator('.tile .activate').click());
   await page.evaluate(async()=>{const canvas=document.createElement('canvas');canvas.width=320;canvas.height=180;const g=canvas.getContext('2d');const stream=canvas.captureStream(5);const video=document.createElement('video');video.muted=true;video.autoplay=true;video.width=320;video.height=180;video.srcObject=stream;document.body.append(video);g.fillStyle='red';g.fillRect(0,0,320,180);await video.play();window.__qaStream=stream;});
   await page.waitForFunction(()=>document.querySelector('video').readyState>0);
   await settings.evaluate(()=>send('browser.action',{action:'spotlight'}));overlay=await findPage('overlay.html#spotlight');await overlay.locator('#query').fill('Görüntü içinde');await overlay.locator('.result').filter({hasText:'Görüntü içinde görüntü'}).first().waitFor();

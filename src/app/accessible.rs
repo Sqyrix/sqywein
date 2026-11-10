@@ -10,7 +10,8 @@ impl App {
         let mut out = vec![
             (Hit::Back, 1, "Geri".into()),
             (Hit::Forward, 2, "İleri".into()),
-            (Hit::Home, 3, "Ana sayfa".into()),
+            (Hit::Sidebar, 3, "Kenar çubuğu".into()),
+            (Hit::Overview, 18, "Sekmelere genel bakış".into()),
             (Hit::Address, 4, "Adres çubuğu".into()),
             (Hit::SiteInfo, 5, "Site bilgileri ve izinleri".into()),
             (Hit::Reload, 6, "Yenile veya durdur".into()),
@@ -38,12 +39,18 @@ impl App {
                 format!("{} sekmesini kapat", t.label()),
             ));
         }
-        out.retain(|(hit, _, _)| self.accessible_rect(*hit).is_some());
+        if self.on_start_page()&&!self.tabs[self.active].private {out.push((Hit::Customize,21,"Başlangıç sayfasını düzenle".into()));}
+        if self.sidebar_open {
+            out.push((Hit::SidebarBookmarks,19,"Yer işaretleri".into()));out.push((Hit::SidebarReading,20,"Okuma Listesi".into()));
+            for (i,t) in self.tabs.iter().enumerate(){out.push((Hit::SidebarTab(i),300_000+t.id,format!("Kenar çubuğu: {}",t.label())));}
+        }
+        out.retain(|(hit, _, _)| self.accessible_rect(*hit).is_some_and(|r|r.w>0.0&&r.h>0.0));
         out
     }
     fn accessible_rect(&self, hit: Hit) -> Option<Rect> {
         let l = self.layout();
         Some(match hit {
+            Hit::Customize=>Self::customize_rect(l.content),
             Hit::Address => l.address,
             Hit::Home => l.home,
             Hit::Share => l.share,

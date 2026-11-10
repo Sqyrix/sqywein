@@ -2,6 +2,18 @@
 
 Sqywein'in sürümden sürüme yenilikleri. En yenisi en üstte.
 
+## 0.5.1
+
+- Eski oturum kayıtlarındaki `SessionClean: null` ve `ReadingList: null` değerleri için veri kaybetmeden okuma ve kayıt normalleştirme. Şifreli yedekleri koruyan `--repair-session` denetimi.
+- Sol üstte trafik ışığı pencere düğmeleri, oval adres alanı, kenar çubuğu ve sağda paylaş/yeni sekme/genel bakış grubu.
+- Sayfa alanında filtrelenebilir sekme önizlemeleri; sekme kapatma ve yeni sekme kutucuğu.
+- Pencere düğmelerinde tona uygun vektör simgeler ve ince gölge; simgeli kütüphane/sekme bölümleri. Motorun sağ tık komutları korunarak yerel, temaya uygun menüde çizilir.
+- DirectWrite ekran ayarları opak metin yüzeyine uygulanır; README görselleri gerçek repo ve Rust sayfası çekimleriyle yenilendi.
+- Tarayıcı menüsü görev odaklı gruplara ayrıldı; yan yana açılan yerel alt menüler, klavye ve UI Automation desteği.
+- Görev yöneticisi; Alt+F, Shift+Esc, Ctrl+Shift+Delete ve Ctrl+Shift+B kısayolları.
+- Normal başlangıç sayfasındaki ikinci arama alanı kaldırıldı; yeni sekmeler doğrudan adres alanına odaklanır.
+- Kamuya açık özellik, gizlilik ve ölçüm açıklamaları doğrulanabilir kapsam ve bilinen sınırlarla güncellendi.
+
 ## 0.5.0
 
 ### Safari menüleri ve çoklu pencere

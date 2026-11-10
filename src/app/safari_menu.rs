@@ -1,6 +1,4 @@
-//! Safari'nin menü çubuğu, Windows'ta tek bir menüde: üstte en sık kullanılanlar,
-//! altında Dosya, Düzen, Görünüm, Geçmiş, Yer İşaretleri, Geliştir, Pencere ve
-//! Yardım alt menüleri. Alt menüler aynı pencerede açılır ("‹ Geri" ile dönülür).
+//! Browser commands grouped in native cascading menus.
 
 use super::*;
 use menu::{Category, Item};
@@ -42,50 +40,47 @@ impl App {
 
     /// Ana menü: en sık kullanılanlar ve Safari'nin menüleri.
     pub(super) fn safari_menu_items(&self) -> Vec<Item> {
-        let sub = |label: &str, c: Category| Item::act(label, "›", MenuCmd::Category(c));
+        let sub=|label:&str,c|Item::act(label,"",MenuCmd::Category(c));
         vec![
-            Item::act("Yeni sekme", "Ctrl+T", MenuCmd::NewTab),
-            Item::act("Yeni pencere", "Ctrl+N", MenuCmd::NewWindow),
-            Item::act("Yeni gizli pencere", "Ctrl+Shift+N", MenuCmd::PrivateWindow),
-            Item::Sep,
-            sub("Dosya", Category::File),
-            sub("Düzen", Category::Edit),
-            sub("Görünüm", Category::View),
-            sub("Geçmiş", Category::History),
-            sub("Yer İşaretleri", Category::Bookmarks),
-            sub("Geliştir", Category::Develop),
-            sub("Pencere", Category::Window),
-            sub("Yardım", Category::Help),
-            Item::Sep,
-            Item::Zoom,
-            Item::Sep,
-            self.page_item("Bu web sitesi için ayarlar…", "", MenuCmd::SitePermissions),
-            Item::act("Uzantılar…", "", MenuCmd::Extensions),
-            Item::act("Şifreler…", "", MenuCmd::Passwords),
-            Item::act("Ayarlar…", "Ctrl+,", MenuCmd::Settings),
-            Item::Sep,
-            Item::act("Sqywein'den çık", "", MenuCmd::Exit),
+            Item::act("Yeni sekme","Ctrl+T",MenuCmd::NewTab),
+            Item::act("Yeni pencere","Ctrl+N",MenuCmd::NewWindow),
+            Item::act("Yeni gizli pencere","Ctrl+Shift+N",MenuCmd::PrivateWindow),Item::Sep,
+            sub("Şifreler ve otomatik doldurma",Category::Autofill),
+            sub("Geçmiş",Category::History),Item::act("İndirmeler","Ctrl+J",MenuCmd::Downloads),
+            sub("Yer işaretleri ve listeler",Category::Bookmarks),Item::act("Uzantılar","",MenuCmd::Extensions),
+            Item::act("Tarama verilerini sil…","Ctrl+Shift+Delete",MenuCmd::ClearData),Item::Sep,
+            Item::Zoom,self.page_item("Yazdır…","Ctrl+P",MenuCmd::Print),
+            sub("Kaydet ve paylaş",Category::SaveShare),sub("Bul ve düzenle",Category::Edit),
+            self.page_item(if self.tabs[self.active].translated {"Orijinal dili göster"}else{"Sayfayı çevir"},"Ctrl+Shift+Y",MenuCmd::Translate),
+            sub("Diğer araçlar",Category::Tools),Item::Sep,
+            Item::act("Ayarlar","Ctrl+,",MenuCmd::Settings),sub("Yardım",Category::Help),Item::act("Çıkış","",MenuCmd::Exit),
         ]
     }
 
     /// Safari'nin alt menüleri.
     pub(super) fn category_items(&self, c: Category) -> Vec<Item> {
-        let back = Item::act("‹ Geri", "", MenuCmd::Category(Category::Main));
-        let tab = &self.tabs[self.active];
-        let mut items = vec![back, Item::Sep];
+        let mut items = vec![];
         match c {
+            Category::Context(command)=>return self.web_context_items(command),
             Category::Main => return self.safari_menu_items(),
-            Category::File => items.extend([
-                Item::act("Yeni sekme", "Ctrl+T", MenuCmd::NewTab),
-                Item::act("Yeni pencere", "Ctrl+N", MenuCmd::NewWindow),
-                Item::act("Yeni gizli pencere", "Ctrl+Shift+N", MenuCmd::PrivateWindow),
-                Item::act("Konum aç…", "Ctrl+L", MenuCmd::OpenLocation),
-                Item::Sep,
-                Item::act("Sekmeyi kapat", "Ctrl+W", MenuCmd::CloseTab),
-                self.page_item("Farklı kaydet…", "Ctrl+S", MenuCmd::SavePage),
-                Item::Sep,
-                self.page_item("Paylaş…", "", MenuCmd::OpenShare),
-                self.page_item("Yazdır…", "Ctrl+P", MenuCmd::Print),
+            Category::Autofill=>items.extend([
+                Item::act("Şifre yöneticisi","",MenuCmd::Passwords),
+                Item::act("Otomatik doldurma ayarları","",MenuCmd::Settings),
+                Item::act("Profilleri yönet","",MenuCmd::ManageProfiles),
+            ]),
+            Category::SaveShare=>items.extend([
+                self.page_item("Sayfayı farklı kaydet…","Ctrl+S",MenuCmd::SavePage),Item::Sep,
+                self.page_item("Bağlantıyı kopyala","",MenuCmd::CopyLink),
+                self.page_item("QR kodu oluştur","",MenuCmd::OpenShare),
+                self.page_item("Windows ile paylaş…","",MenuCmd::ShareWindows),
+                self.page_item("E-postayla gönder","",MenuCmd::EmailLink),
+            ]),
+            Category::Tools=>items.extend([
+                self.page_item(if self.reader_on {"Okuma modunu kapat"}else{"Okuma modu"},"Ctrl+Shift+R",MenuCmd::Reader),
+                Item::act("Görev yöneticisi","Shift+Esc",MenuCmd::TaskManager),Item::Sep,
+                self.page_item("Site bilgileri ve izinleri…","Alt+I",MenuCmd::SitePermissions),
+                self.page_item("Geliştirici araçları","F12",MenuCmd::DevTools),
+                self.page_item("Sayfanın kaynağını göster","Ctrl+U",MenuCmd::ViewSource),
             ]),
             Category::Edit => items.extend([
                 Item::act("Geri al", "Ctrl+Z", MenuCmd::Edit(0)),
@@ -96,19 +91,6 @@ impl App {
                 Item::Sep,
                 self.page_item("Bul…", "Ctrl+F", MenuCmd::Find),
                 Item::act("Otomatik doldurma ve şifreler…", "", MenuCmd::Passwords),
-            ]),
-            Category::View => items.extend([
-                Item::act("Sekmelere genel bakış", "Ctrl+Shift+A", MenuCmd::Overview),
-                self.page_item(if self.reader_on { "Okuyucuyu gizle" } else { "Okuyucuyu göster" }, "Ctrl+Shift+R", MenuCmd::Reader),
-                self.page_item(if tab.translated { "Orijinal dili göster" } else { "Sayfayı çevir" }, "Ctrl+Shift+Y", MenuCmd::Translate),
-                Item::Sep,
-                Item::act(if self.state.settings.show_bookmarks_bar { "Yer işaretleri çubuğunu gizle" } else { "Yer işaretleri çubuğunu göster" }, "", MenuCmd::ToggleBookmarksBar),
-                Item::act(if self.focus_mode { "Araç çubuğunu göster" } else { "Araç çubuğunu gizle" }, "Ctrl+Shift+F", MenuCmd::FocusMode),
-                Item::act(if self.full_screen.is_some() { "Tam ekrandan çık" } else { "Tam ekran" }, "F11", MenuCmd::FullScreen),
-                Item::Sep,
-                Item::act("Yakınlaştır", "Ctrl +", MenuCmd::ZoomIn),
-                Item::act("Uzaklaştır", "Ctrl −", MenuCmd::ZoomOut),
-                self.page_item("Yeniden yükle", "F5", MenuCmd::Reload),
             ]),
             Category::History => {
                 items.extend([
@@ -126,6 +108,7 @@ impl App {
             }
             Category::Bookmarks => {
                 items.extend([
+                    Item::act(if self.state.settings.show_bookmarks_bar {"Yer işaretleri çubuğunu gizle"}else{"Yer işaretleri çubuğunu göster"},"Ctrl+Shift+B",MenuCmd::ToggleBookmarksBar),
                     Item::act("Yer işaretlerini göster", "Ctrl+Shift+O", MenuCmd::Bookmarks),
                     self.page_item("Yer işareti ekle…", "Ctrl+D", MenuCmd::BookmarkPage),
                     Item::act("Tüm sekmeleri yer işaretlerine ekle", "", MenuCmd::BookmarkAll),
@@ -140,7 +123,6 @@ impl App {
                 }
             }
             Category::Reading => {
-                items[0] = Item::act("‹ Geri", "", MenuCmd::Category(Category::Bookmarks));
                 if self.state.reading_list.is_empty() {
                     items.push(Item::disabled("Okuma Listesi boş"));
                 }
@@ -149,20 +131,6 @@ impl App {
                     items.push(Item::Action { label, hint: "Kaldır".into(), cmd: MenuCmd::OpenReading(i), enabled: true, side: Some(MenuCmd::RemoveReading(i)), icon: self.icon_for(&b.url) });
                 }
             }
-            Category::Develop => items.extend([
-                self.page_item("Web denetçisi", "F12", MenuCmd::DevTools),
-                self.page_item("Sayfanın kaynağını göster", "Ctrl+U", MenuCmd::ViewSource),
-                self.page_item("Yeniden yükle", "F5", MenuCmd::Reload),
-            ]),
-            Category::Window => items.extend([
-                Item::act("Küçült", "", MenuCmd::Minimize),
-                Item::act("Büyüt", "", MenuCmd::Maximize),
-                Item::act(if self.full_screen.is_some() { "Tam ekrandan çık" } else { "Tam ekran" }, "F11", MenuCmd::FullScreen),
-                Item::Sep,
-                Item::act("Sekmelere genel bakış", "Ctrl+Shift+A", MenuCmd::Overview),
-                self.page_item("Görüntü içinde görüntü", "", MenuCmd::PictureInPicture),
-                Item::act("İndirmeler", "Ctrl+J", MenuCmd::Downloads),
-            ]),
             Category::Help => items.extend([
                 Item::act("Sqywein yardımı", "", MenuCmd::Help),
                 Item::act("Sorun bildir…", "", MenuCmd::ReportIssue),
@@ -177,14 +145,13 @@ impl App {
     pub(super) fn safari_command(&mut self, cmd: MenuCmd) -> bool {
         match cmd {
             MenuCmd::Category(c) => {
-                let items = self.category_items(c);
-                if let Some(m) = &mut self.menu { m.set_items(items); }
+                if c==Category::Main {if self.menu.is_none(){self.open_menu(MenuKind::Main);}else{self.close_submenus(0);}}else{self.open_submenu(c,true);}
                 return true;
             }
             MenuCmd::RemoveReading(i) => {
                 if i < self.state.reading_list.len() { self.state.reading_list.remove(i); self.dirty = true; }
                 let items = self.category_items(Category::Reading);
-                if let Some(m) = &mut self.menu { m.set_items(items); }
+                if let Some(m) = self.submenus.iter_mut().rev().find(|m|m.kind==MenuKind::Category(Category::Reading)) {m.set_items(items);}else if let Some(m)=&mut self.menu {m.set_items(items);}
                 return true;
             }
             _ => {}
@@ -193,11 +160,12 @@ impl App {
             | MenuCmd::ClearData | MenuCmd::ToggleBookmarksBar | MenuCmd::BookmarkAll | MenuCmd::BookmarkPage | MenuCmd::ReopenTab | MenuCmd::OpenMenuLink(_)
             | MenuCmd::AddReading | MenuCmd::OpenReading(_) | MenuCmd::Reader | MenuCmd::About | MenuCmd::Help | MenuCmd::ReportIssue
             | MenuCmd::OpenLocation | MenuCmd::CloseTab | MenuCmd::Back | MenuCmd::Forward | MenuCmd::Home | MenuCmd::Reload | MenuCmd::ViewSource
-            | MenuCmd::Minimize | MenuCmd::Maximize | MenuCmd::CheckUpdates);
+            | MenuCmd::Minimize | MenuCmd::Maximize | MenuCmd::CheckUpdates | MenuCmd::TaskManager);
         if !handled { return false; }
         self.close_menu();
         let hwnd = self.hwnd;
         match cmd {
+            MenuCmd::TaskManager => self.open_surface(overlay::Surface::Tasks),
             MenuCmd::NewWindow | MenuCmd::PrivateWindow => {
                 let profile = self.state.current_profile.clone();
                 if let Err(e) = crate::windows_session::spawn(cmd == MenuCmd::PrivateWindow, &profile) {
@@ -247,7 +215,7 @@ impl App {
             MenuCmd::Help => self.new_tab("https://github.com/Sqyrix/sqywein#readme".into(), None),
             MenuCmd::ReportIssue => self.new_tab("https://github.com/Sqyrix/sqywein/issues/new".into(), None),
             MenuCmd::OpenLocation => self.run(Cmd::FocusAddress),
-            MenuCmd::CloseTab => self.run(Cmd::CloseTab),
+            MenuCmd::CloseTab => self.close_tab(self.active),
             MenuCmd::Back => self.run(Cmd::Back),
             MenuCmd::Forward => self.run(Cmd::Forward),
             MenuCmd::Home => self.go_home(),
@@ -273,9 +241,15 @@ impl App {
     /// Düzen menüsü: sayfaya klavye kısayolunu gönderir (seçili metin, form alanı vb.).
     fn send_edit_keys(&mut self, k: u8) {
         use windows::Win32::UI::Input::KeyboardAndMouse::*;
+        if let Some(edit)=self.menu_edit.take(){
+            unsafe{match k{0=>{SendMessageW(edit,WM_UNDO,None,None);},1=>{SendMessageW(edit,WM_CUT,None,None);},2=>{SendMessageW(edit,WM_COPY,None,None);},3=>{SendMessageW(edit,WM_PASTE,None,None);},_=>{SendMessageW(edit,EM_SETSEL,Some(WPARAM(0)),Some(LPARAM(-1)));}}}
+            return;
+        }
         let key = match k { 0 => b'Z', 1 => b'X', 2 => b'C', 3 => b'V', _ => b'A' } as u16;
         self.focus_content();
+        let hwnd=self.hwnd;
         defer(move || unsafe {
+            if GetForegroundWindow()!=hwnd{return;}
             let input = |vk: u16, up: bool| INPUT { r#type: INPUT_KEYBOARD, Anonymous: INPUT_0 { ki: KEYBDINPUT { wVk: VIRTUAL_KEY(vk), dwFlags: if up { KEYEVENTF_KEYUP } else { KEYBD_EVENT_FLAGS(0) }, ..Default::default() } } };
             let seq = [input(VK_CONTROL.0, false), input(key, false), input(key, true), input(VK_CONTROL.0, true)];
             SendInput(&seq, std::mem::size_of::<INPUT>() as i32);

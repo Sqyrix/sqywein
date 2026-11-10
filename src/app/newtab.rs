@@ -220,12 +220,10 @@ impl App {
             let search = Rect::new(cx - search_w / 2.0, title.bottom() + 34.0, search_w, 54.0);
             return StartLayout { logo, title, search, tiles: vec![], add: None, favorites_title: Rect::new(0.0, 0.0, 0.0, 0.0), weather: None, rates: None };
         }
-        let mut y = content.y + 24.0;
-        let logo = Rect::new(cx - 26.0, y, 52.0, 52.0);
-        let title = Rect::new(content.x, logo.bottom() + 2.0, content.w, 0.0);
-        y = logo.bottom() + 18.0;
-        let search = Rect::new(x0, y, w, 46.0);
-        y = search.bottom() + 30.0;
+        let mut y = content.y + 36.0;
+        let logo=Rect::new(cx,y,0.0,0.0);
+        let title=logo;
+        let search=logo;
 
         // Favoriler: eşit aralıklı kare kutucuklar.
         let tile_w = w / TILE_COLS as f32;
@@ -274,22 +272,25 @@ impl App {
             g.glow(l.content.cx(), s.logo.cy() + 20.0, 280.0, 120.0, accent(), 0.16);
             if let Some(img) = &self.logo { g.image(img, s.logo, false); }
             g.text("Gizli sekme", s.title, Font::Big, ink(), Align::Center);
-        } else if let Some(img) = &self.logo {
-            g.image(img, s.logo, false);
         }
 
+        if private {
         if focused {
             g.round_outline_alpha(r.inset(-4.0, -4.0), radius + 4.0, accent(), 4.0, 0.10);
         }
         g.round(r, radius, search());
         g.round_outline(r, radius, if focused { accent() } else { line() }, if focused { 1.5 } else { 1.0 });
         g.text(ICON_SEARCH, Rect::new(r.x + 14.0, r.y, 26.0, r.h), Font::Icon, if focused { accent() } else { muted() }, Align::Center);
+        }
 
         if private {
             g.text("Geçmiş ve çerezler bu sekme kapanınca silinir.", Rect::new(l.content.x, r.bottom() + 24.0, l.content.w, 20.0), Font::Small, faint(), Align::Center);
             return;
         }
 
+        let edit=Self::customize_rect(l.content);
+        g.round(edit,13.0,if self.hover==Hit::Customize {hover()}else{search()});
+        g.text("Düzenle",edit,Font::Small,ink(),Align::Center);
         // Favoriler
         self.section_title(s.favorites_title, "Favoriler");
         for (i, (t, b)) in s.tiles.iter().zip(&self.state.shortcuts).enumerate() {
@@ -450,10 +451,12 @@ impl App {
     }
 
     /// Ana sayfadaki bir noktanın karşılığı.
+    pub(super) fn customize_rect(content:Rect)->Rect{Rect::new(content.right()-94.0,content.bottom()-42.0,76.0,26.0)}
     pub(super) fn start_hit(&self, content: Rect, x: f32, y: f32) -> Hit {
         if self.tabs[self.active].private {
             return Hit::None;
         }
+        if Self::customize_rect(content).contains(x,y){return Hit::Customize;}
         let s = self.start_layout(content);
         for (i, t) in s.tiles.iter().enumerate().take(self.state.shortcuts.len()) {
             if Self::tile_remove(*t).contains(x, y) {

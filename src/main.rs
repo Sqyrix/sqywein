@@ -32,6 +32,10 @@ mod url;
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 
 fn main() {
+    if std::env::args().any(|a|a=="--repair-session"){
+        let mut saved=state::load();let ok=saved.storage_error.is_none() && state::save(&mut saved).is_ok();
+        println!("{}",if ok{"Oturum kaydı doğrulandı ve korumalı biçimde kaydedildi."}else{"Oturum kaydı onarılamadı; eski kayıtlar korundu."});std::process::exit(if ok{0}else{1});
+    }
     // SqyweinSetup.exe / --install / --uninstall: tarayıcı açılmadan kurulum yapılır.
     if let Some(mode) = setup::mode() {
         std::process::exit(setup::run(mode));

@@ -243,6 +243,9 @@ impl App {
                 let p = self.state.profile();
                 if p.email.is_empty() { p.name.clone() } else { format!("{}\n{}", p.name, p.email) }
             }
+            Hit::Sidebar=>"Kenar çubuğunu göster veya gizle".into(),
+            Hit::Overview=>"Sekmelere genel bakış (Ctrl+Shift+A)".into(),
+            Hit::Customize=>"Başlangıç sayfasını düzenle".into(),
             Hit::Menu => "Sqywein'i özelleştir ve yönet".into(),
             Hit::Min => "Küçült".into(),
             Hit::Max => if unsafe { IsZoomed(self.hwnd) }.as_bool() { "Geri al".into() } else { "Ekranı kapla".into() },
@@ -280,6 +283,9 @@ impl App {
     pub(super) fn hit_rect(&self, hit: Hit) -> Option<Rect> {
         let l = self.layout();
         Some(match hit {
+            Hit::Sidebar=>l.sidebar,
+            Hit::Overview=>l.overview,
+            Hit::SidebarTab(_)|Hit::SidebarBookmarks|Hit::SidebarReading=>self.sidebar_rect(hit)?,
             Hit::Back => l.back,
             Hit::SiteInfo=>Rect::new(l.address.x+6.0,l.address.y,28.0,l.address.h),
             Hit::Forward => l.forward,

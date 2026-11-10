@@ -5,6 +5,7 @@ pub(super) const TIMER_THUMBNAIL: usize = 8;
 
 #[derive(Clone)]
 pub(super) enum Surface {
+    Tasks,
     Spotlight,
     Tabs,
     Download(u32),
@@ -17,10 +18,11 @@ pub(super) enum Surface {
 
 impl App {
     pub(super) fn open_surface(&mut self, surface: Surface) {
+        if matches!(surface,Surface::Tabs)&&matches!(self.surface,Some(Surface::Tabs)){self.close_popup();self.focus_content();return;}
         self.close_menu();
         self.close_popup();
         self.overlay_generation = self.overlay_generation.wrapping_add(1);
-        let kind = match &surface { Surface::Site{..}=>"site", Surface::Spotlight => "spotlight", Surface::Tabs => "tabs", Surface::Download(_) => "download", Surface::Text(_) => "text", Surface::Notice(_) => "notice", Surface::Link(_) | Surface::File(_) => "link" };
+        let kind = match &surface { Surface::Tasks=>"tasks",Surface::Site{..}=>"site", Surface::Spotlight => "spotlight", Surface::Tabs => "tabs", Surface::Download(_) => "download", Surface::Text(_) => "text", Surface::Notice(_) => "notice", Surface::Link(_) | Surface::File(_) => "link" };
         let scale = self.scale();
         let mut owner = RECT::default();
         unsafe { let _ = GetWindowRect(self.hwnd, &mut owner); }
@@ -34,22 +36,25 @@ impl App {
         let height = height.min((work.bottom - work.top - 24).max(200));
         let x = ((owner.left + owner.right - width) / 2).clamp(work.left, (work.right - width).max(work.left));
         let y = ((owner.top + owner.bottom - height) / 2).clamp(work.top, (work.bottom - height).max(work.top));
+        let embedded=kind=="tabs";
+        let bounds=self.px(self.layout().content);
+        let (x,y,width,height)=if embedded{(bounds.left,bounds.top,bounds.right-bounds.left,bounds.bottom-bounds.top)}else{(x,y,width,height)};
         let Ok(instance) = (unsafe { GetModuleHandleW(None) }) else { return };
-        let Ok(hwnd) = (unsafe { CreateWindowExW(WS_EX_TOOLWINDOW, extensions::POPUP_CLASS, w!("Sqywein"), WS_POPUP | WS_CLIPCHILDREN, x, y, width, height, Some(self.hwnd), None, Some(instance.into()), None) }) else { return };
+        let Ok(hwnd) = (unsafe { CreateWindowExW(WS_EX_TOOLWINDOW, extensions::POPUP_CLASS, w!("Sqywein"), (if embedded {WS_CHILD}else{WS_POPUP}) | WS_CLIPCHILDREN, x, y, width, height, Some(self.hwnd), None, Some(instance.into()), None) }) else { return };
         unsafe {
             let dark = i32::from(is_dark());
             let _ = DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark as *const _ as _, 4);
             let corner = DWMWCP_ROUND;
             let _ = DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &corner as *const _ as _, 4);
         }
-        let glass = apply_backdrop(hwnd, self.state.settings.glass && crate::theme::system_transparency());
+        let glass = !embedded && apply_backdrop(hwnd, self.state.settings.glass && crate::theme::system_transparency());
         self.surface = Some(surface);
         let target = match &self.surface { Some(Surface::Link(target) | Surface::File(target)) => target.clone(), _ => format!("{}#{kind}", url::internal("overlay")) };
         let gfx = if kind == "link" { Gfx::new().ok().map(|mut g| { g.set_dpi(self.dpi); g.hardware = self.gfx.hardware; g }) } else { None };
         self.popup = Some(Popup { hwnd, ctrl: None, url: target, gfx, glass });
         self.ensure_env();
         if let Some(env) = &self.env { let _ = engine::create_view(env, hwnd, POPUP_VIEW, &self.engine_profile(), false); }
-        if unsafe { IsWindowVisible(self.hwnd) }.as_bool() { defer(move || unsafe { let _ = ShowWindow(hwnd, SW_SHOW); }); }
+        if unsafe { IsWindowVisible(self.hwnd) }.as_bool() { defer(move || unsafe {let _ = SetWindowPos(hwnd,Some(HWND_TOP),0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE); let _ = ShowWindow(hwnd, SW_SHOW); }); }
     }
 
     pub(super) fn surface_view(&self) -> Option<ICoreWebView2> {
@@ -62,6 +67,9 @@ impl App {
         let kind = msg["type"].as_str().unwrap_or("");
         if kind.starts_with("overlay.site.") { self.site_message(kind,msg); return; }
         match kind {
+            "overlay.endTab" if matches!(self.surface,Some(Surface::Tasks|Surface::Tabs))=>{
+                if let Some(i)=msg["id"].as_u64().and_then(|id|u32::try_from(id).ok()).and_then(|id|self.index_of(id)).filter(|i|self.tabs[*i].private==self.tabs[self.active].private){self.close_tab(i);if matches!(self.surface,Some(Surface::Tabs)){if let Some(p)=self.popup.as_ref(){unsafe{let _=SetWindowPos(p.hwnd,Some(HWND_TOP),0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);}}}}
+            }
             "overlay.close" => { self.close_popup(); self.focus_content(); }
             "overlay.activate" => {
                 if let Some(i) = msg["id"].as_u64().and_then(|id| u32::try_from(id).ok()).and_then(|id| self.index_of(id)) {
@@ -97,6 +105,10 @@ impl App {
                 let bookmarks: Vec<Value> = self.state.favorites.iter().filter(|b| format!("{} {}",b.title,b.url).to_lowercase().contains(&query)).take(20).map(|b| json!({"title":b.title,"url":b.url})).collect();
                 let mut reply = json!({"type":"overlay.get","query":query,"tabs":tabs,"history":history,"bookmarks":bookmarks});
                 match self.surface.clone() {
+                    Some(Surface::Tasks)=>{
+                        let own=unsafe{windows::Win32::System::Threading::GetCurrentProcessId()};let mut pids=vec![own];if let Some(env)=&self.env{pids.extend(engine::process_ids(env));}pids.sort_unstable();pids.dedup();
+                        reply["processes"]=json!(pids.into_iter().map(|pid|json!({"id":pid,"name":if pid==own{"Sqywein arayüzü"}else{"Tarayıcı motoru"},"memoryMB":crate::memory::private_bytes(pid)as f64/(1024.0*1024.0)})).collect::<Vec<_>>());
+                    },
                     Some(Surface::Download(id)) => { reply["preview"] = json!({"loading":true}); self.request_download_preview(id); },
                     Some(Surface::Text(text) | Surface::Notice(text)) => reply["text"] = json!(text),
                     _ => {},

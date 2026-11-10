@@ -13,6 +13,7 @@ public class SqyweinNativeQA {
  [DllImport("user32.dll",CharSet=CharSet.Unicode)]static extern int GetClassNameW(IntPtr h,StringBuilder b,int n);
  [DllImport("user32.dll")]public static extern IntPtr SendMessageW(IntPtr h,uint m,IntPtr w,IntPtr l);
  [DllImport("user32.dll")]public static extern bool ShowWindow(IntPtr h,int n);
+ public static IntPtr[] FindAll(uint pid,string name){var found=new System.Collections.Generic.List<IntPtr>();EnumWindows((h,l)=>{uint p;GetWindowThreadProcessId(h,out p);var s=new StringBuilder(80);GetClassNameW(h,s,80);if(p==pid&&s.ToString()==name)found.Add(h);return true;},IntPtr.Zero);return found.ToArray();}
  public static IntPtr Find(uint pid,string name){IntPtr result=IntPtr.Zero;EnumWindows((h,l)=>{uint p;GetWindowThreadProcessId(h,out p);var s=new StringBuilder(80);GetClassNameW(h,s,80);if(p==pid&&s.ToString()==name){result=h;return false;}return true;},IntPtr.Zero);return result;}
 }
 '@
@@ -21,6 +22,13 @@ if($window -eq [IntPtr]::Zero){throw 'Isolated browser window not found'}
 if($Action -eq 'show'){[SqyweinNativeQA]::ShowWindow($window,4)|Out-Null;return}
 if($Action -eq 'close'){[SqyweinNativeQA]::SendMessageW($window,0x10,[IntPtr]::Zero,[IntPtr]::Zero)|Out-Null;return}
 if($Action -eq 'key'){[SqyweinNativeQA]::SendMessageW($window,0x100,[IntPtr]$Key,[IntPtr]::Zero)|Out-Null;return}
+if($Action -eq 'menu-names' -or $Action -eq 'menu-invoke'){
+ $windows=@([SqyweinNativeQA]::FindAll($BrowserProcessId,'SqyweinMenu')|ForEach-Object{[System.Windows.Automation.AutomationElement]::FromHandle($_)})
+ $names=@();$found=$null
+ foreach($entry in $windows){if($entry.Current.NativeWindowHandle -eq $window.ToInt32()){continue};$items=$entry.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition);foreach($item in $items){$names+=$item.Current.Name;if($item.Current.Name -eq $Name){$found=$item}}}
+ if($Action -eq 'menu-names'){ConvertTo-Json -InputObject $names -Compress;return}
+ if(!$found){throw "Menu item not found: $Name. Present: $($names -join ", ")"};$found.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke();return
+}
 $root=[System.Windows.Automation.AutomationElement]::FromHandle($window)
 if($Action -eq 'names' -or $Action -eq 'names-deep'){
  $scope=[System.Windows.Automation.TreeScope]::Descendants

@@ -65,6 +65,10 @@ pub fn command(vk: u32, m: Mods, in_address: bool) -> Option<Cmd> {
     Some(match (m.ctrl, m.shift, m.alt, key, vk) {
         (_, _, _, _, VK_RETURN) if in_address => Cmd::Go,
         (_, _, _, _, VK_ESCAPE) if in_address => Cmd::Cancel,
+        (false,true,false,_,VK_ESCAPE)=>Cmd::Menu(MenuCmd::TaskManager),
+        (false,false,true,Some('F'),_)=>Cmd::Menu(MenuCmd::Category(crate::menu::Category::Main)),
+        (true,true,false,_,0x2E)=>Cmd::Menu(MenuCmd::ClearData),
+        (true,true,false,Some('B'),_)=>Cmd::Menu(MenuCmd::ToggleBookmarksBar),
         (true, false, false, _, 0x20) => Cmd::Spotlight,
         (true, true, false, Some('A'), _) => Cmd::Overview,
         (true, true, false, Some('T'), _) => Cmd::ReopenTab,

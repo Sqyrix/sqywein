@@ -1,3 +1,18 @@
+# 0.5.1 doğrulama — 10 Kasım 2026
+
+- Rust: 64 test başarılı, 7 isteğe bağlı/ortama bağlı test atlandı. Eski `SessionClean: null` ve `ReadingList: null` kayıtlarından sekme kaybetmeden yükleme regresyonu dahil.
+- Bütün hedeflerde Clippy: uyarısız.
+- Yerel menü paketi: 31 kontrol. Ana komutlar, yan yana alt menüler, boş Okuma Listesi, görev yöneticisi süreçleri, kenar çubuğu, sekme ızgarasında kapatma/yeni sekme, motorun gerçek sağ tık yenileme komutu ve tekrar açılabilir eski oturum kaydı.
+- İç sayfalar: 201 kontrol; 1280 ve 600 pikselde altı sayfa, tarayıcı hatası/dış ağ isteği yok.
+- Güvenlik betikleri: 29 kontrol. Otomatik doldurma: 24 kontrol. Video engelleme: 18 çevrimdışı kontrol. Yardımcı yüzeyler/çeviri: 25 kontrol.
+- Gerçek Windows/WebView2: 22 çekirdek ve 35 motor bütünleşme kontrolü başarılı; bildirim izni, yönlendirmeler, oturum ve açılır pencere davranışları dahil.
+- Son görsel kontrolde kenar çubuğundaki Sekmeler başlığı ile ilk sekme arasındaki çakışma giderildi ve gerçek uygulamada doğrulandı.
+- Kaynak tüketimi için bu değişikliğe ait yeni karşılaştırmalı ölçüm yapılmadı. Önceki tarihli sonuçlar yeni sürümün sonucu olarak sunulmuyor.
+- Görsel kontrol: gerçek Windows uygulamasında açık/koyu araç çubuğu; README için GitHub depo ve Rust sitesi çekimleri. İki görsel `docs/ekran-acik.jpg` ve `docs/ekran-koyu.jpg`.
+- Gerçek hesap/şifre veya oturum çerezleri test profiline kopyalanmadı. Başlangıç hatası için kullanıcının eski şifreli kayıtları ayrıca yerel yedekte korundu.
+
+## Önceki doğrulama kayıtları
+
 # İşlev ve güvenlik düzeltmeleri — 7 Kasım 2026
 
 Ayarlar mevcut görsel dil korunarak kategorilere ayrıldı ve aranabilir hale getirildi. Görsel tasarım turu sonraki çalışma için ayrıdır.

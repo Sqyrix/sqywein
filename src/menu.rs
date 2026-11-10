@@ -24,6 +24,8 @@ pub const CLASS: PCWSTR = w!("SqyweinMenu");
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MenuKind {
+    Category(Category),
+    WebContext,
     Permission,
     Main,
     Profile,
@@ -38,10 +40,11 @@ pub enum MenuKind {
 }
 
 #[derive(Clone,Copy,PartialEq,Eq,Debug)]
-pub enum Category { Main, File, Edit, View, History, Bookmarks, Reading, Develop, Window, Help }
+pub enum Category { Context(i32), Main, Edit, History, Bookmarks, Reading, Help, Autofill, SaveShare, Tools }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MenuCmd {
+    Context(i32),
     Category(Category),
     NewWindow,
     PrivateWindow,
@@ -71,6 +74,7 @@ pub enum MenuCmd {
     About,
     Help,
     ReportIssue,
+    TaskManager,
     PermissionAllow,
     PermissionDeny,
     Overview,
@@ -201,6 +205,7 @@ impl Item {
 /// Menüdeki bir noktanın karşılığı.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Part {
+    FullScreen,
     TranslationSource,
     TranslationClose,
     TranslationTarget,
@@ -259,13 +264,19 @@ pub fn avatar(g: &Gfx, r: Rect, photo: Option<&Image>, color: Rgb, name: &str) {
 }
 
 impl Menu {
+    pub fn hover_category(&self)->Option<Category>{match self.hover.and_then(|p|self.command(p)){Some(MenuCmd::Category(c))=>Some(c),_=>None}}
+    pub fn category_rect(&self,category:Category)->Option<RECT>{
+        let row=self.items.iter().zip(self.rows()).find_map(|(item,r)|match item{Item::Action{cmd:MenuCmd::Category(c),..}if *c==category=>Some(r),_=>None})?;
+        let scale=self.dpi as f32/96.0;let mut p=POINT::default();unsafe{let _=ClientToScreen(self.hwnd,&mut p);}
+        Some(RECT{left:p.x+(row.x*scale)as i32,top:p.y+(row.y*scale)as i32,right:p.x+(row.right()*scale)as i32,bottom:p.y+(row.bottom()*scale)as i32})
+    }
     fn accessible_parts(&self)->Vec<(Part,String,Rect,bool)> {
         let mut parts=Vec::new();
         for (i,(item,r)) in self.items.iter().zip(self.rows()).enumerate(){
             match item {
                 Item::Action{label,enabled,side,..}=>{parts.push((Part::Row(i),label.clone(),r,*enabled));if side.is_some(){parts.push((Part::Side(i),format!("{label} — diğer işlem"),Rect::new(r.right()-SIDE_W,r.y,SIDE_W,r.h),*enabled));}},
                 Item::Translation{..}=>{for (part,label) in [(Part::TranslationSource,"Orijinal dil"),(Part::TranslationTarget,"Çevir"),(Part::TranslationOptions,"Çeviri seçenekleri"),(Part::TranslationClose,"Çeviri panelini kapat")]{parts.push((part,label.into(),r,true));}},
-                Item::Zoom=>{parts.push((Part::Minus,"Uzaklaştır".into(),r,true));parts.push((Part::Plus,"Yakınlaştır".into(),r,true));},
+                Item::Zoom=>{let(a,_,b)=Self::zoom_buttons(r);parts.push((Part::Minus,"Uzaklaştır".into(),a,self.zoom.is_some()));parts.push((Part::Plus,"Yakınlaştır".into(),b,self.zoom.is_some()));parts.push((Part::FullScreen,"Tam ekran".into(),Rect::new(r.right()-39.0,r.y+5.0,28.0,r.h-10.0),true));},
                 Item::Slider{..}=>{for n in 0..=3 {parts.push((Part::Level(n),format!("Reklam engelleme seviyesi {n}"),r,true));}},
                 Item::Download(d)=>{parts.push((Part::Row(i),d.line.clone(),r,d.done));parts.push((Part::Side(i),if d.done{"Klasörde göster"}else{"İndirmeyi iptal et"}.into(),r,true));},
                 _=>{},
@@ -297,7 +308,8 @@ impl Menu {
     pub fn open(owner: HWND, kind: MenuKind, anchor: POINT, dpi: u32, items: Vec<Item>, zoom: Option<f64>, hardware: bool) -> Result<Self> {
         let s = dpi as f32 / 96.0;
         let h: f32 = items.iter().map(Item::height).sum::<f32>() + 2.0 * PAD;
-        let (mut wpx, mut hpx) = (((if matches!(kind, MenuKind::Translate | MenuKind::Permission) { 380.0 } else { MENU_WIDTH }) * s).round() as i32, (h * s).round() as i32);
+        let width=if matches!(kind,MenuKind::Translate|MenuKind::Permission){380.0}else if matches!(kind,MenuKind::Main|MenuKind::Category(_)|MenuKind::WebContext){320.0}else{MENU_WIDTH};
+        let (mut wpx, mut hpx) = ((width*s).round() as i32, (h * s).round() as i32);
         let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
         unsafe { let _ = GetMonitorInfoW(MonitorFromPoint(anchor, MONITOR_DEFAULTTONEAREST), &mut info); }
         let work = info.rcWork;
@@ -360,7 +372,7 @@ impl Menu {
     }
 
     fn zoom_buttons(row: Rect) -> (Rect, Rect, Rect) {
-        let plus = Rect::new(row.right() - 14.0 - 28.0, row.y + 5.0, 28.0, row.h - 10.0);
+        let plus = Rect::new(row.right() - 48.0 - 28.0, row.y + 5.0, 28.0, row.h - 10.0);
         let value = Rect::new(plus.x - 52.0, plus.y, 52.0, plus.h);
         let minus = Rect::new(value.x - 28.0, plus.y, 28.0, plus.h);
         (minus, value, plus)
@@ -433,7 +445,9 @@ impl Menu {
                         Some(Part::Row(i))
                     }
                 }
-                Item::Zoom if self.zoom.is_some() => {
+                Item::Zoom => {
+                    if Rect::new(r.right()-39.0,r.y+5.0,28.0,r.h-10.0).contains(x,y){return Some(Part::FullScreen)}
+                    self.zoom?;
                     let (minus, _, plus) = Self::zoom_buttons(r);
                     if minus.contains(x, y) {
                         Some(Part::Minus)
@@ -467,10 +481,12 @@ impl Menu {
         match part { Some(Part::Row(i)) => match self.items.get(i) { Some(Item::Download(d)) if d.done => Some(MenuCmd::PreviewDownload(d.id)), _ => None }, _ => None }
     }
     pub fn keyboard(&mut self, key: u32) -> Option<MenuCmd> {
+        if key==0x27{if let Some(c)=self.hover_category(){return Some(MenuCmd::Category(c))}}
         if key==0x27{if let Some(MenuCmd::Category(category))=self.hover.and_then(|p|self.command(p)){return Some(MenuCmd::Category(category))}}
         let parts: Vec<Part> = self.items.iter().enumerate().flat_map(|(i, item)| match item {
             Item::Translation { .. } => vec![Part::TranslationSource, Part::TranslationTarget, Part::TranslationOptions, Part::TranslationClose],
             Item::Action { enabled: true, .. } => vec![Part::Row(i)],
+            Item::Zoom=>if self.zoom.is_some(){vec![Part::Minus,Part::Plus,Part::FullScreen]}else{vec![Part::FullScreen]},
             Item::Download(d) if d.done => vec![Part::Row(i), Part::Side(i)],
             _ => vec![],
         }).collect();
@@ -502,6 +518,7 @@ impl Menu {
 
     pub fn command(&self, part: Part) -> Option<MenuCmd> {
         match part {
+            Part::FullScreen=>Some(MenuCmd::FullScreen),
             Part::TranslationClose => Some(MenuCmd::TranslationClose),
             Part::TranslationSource => Some(MenuCmd::TranslationOriginal),
             Part::TranslationTarget => Some(MenuCmd::Translate),
@@ -596,7 +613,7 @@ impl Menu {
         } else {
             g.clear(raised());
         }
-        g.round_outline_alpha(full, 8.0, line(), 1.0, 0.8);
+        g.round_outline_alpha(full, 11.0, line(), 1.0, 0.8);
 
         for (i, (item, r)) in self.items.iter().zip(self.rows()).enumerate() {
             match item {
@@ -620,25 +637,29 @@ impl Menu {
                     g.text(&head.title, Rect::new(card.x + 64.0, card.y + 12.0, card.w - 74.0, 20.0), Font::UiBold, ink(), Align::Left);
                     g.text(&head.sub, Rect::new(card.x + 64.0, card.y + 33.0, card.w - 74.0, 18.0), Font::Small, muted(), Align::Left);
                 }
-                Item::Action { label, hint, enabled, side, icon, .. } => {
+                Item::Action { label, hint, enabled, side, icon, cmd } => {
                     let row_hover = self.hover == Some(Part::Row(i));
                     let side_hover = self.hover == Some(Part::Side(i));
                     if *enabled && (row_hover || side_hover) {
-                        g.round(r.inset(6.0, 1.0), 6.0, hover());
+                        g.round(r.inset(6.0, 1.0), 7.0, hover());
                     }
                     let mut x = r.x + 16.0;
                     if let Some(img) = icon {
                         g.image(img, Rect::new(x, r.cy() - 8.0, 16.0, 16.0), false);
                         x += 26.0;
                     }
+                    let glyph=match cmd{
+                        MenuCmd::NewTab=>Some(ICON_ADD),MenuCmd::History=>Some("\u{E81C}"),MenuCmd::Downloads=>Some(ICON_DOWNLOAD),MenuCmd::Passwords=>Some("\u{E8D7}"),MenuCmd::Settings=>Some("\u{E713}"),MenuCmd::Print=>Some("\u{E749}"),MenuCmd::Find=>Some(ICON_SEARCH),MenuCmd::Reader=>Some("\u{E736}"),MenuCmd::Context(_)=>{let label=label.to_lowercase();if label.starts_with("geri"){Some(ICON_BACK)}else if label.starts_with("yenile"){Some(ICON_RELOAD)}else if label.contains("kopyala"){Some("\u{E8C8}")}else if label.contains("yapıştır"){Some("\u{E77F}")}else if label.starts_with("yazdır"){Some("\u{E749}")}else{None}},_=>None};
+                    if let Some(glyph)=glyph.filter(|_|icon.is_none()){g.text(glyph,Rect::new(x,r.cy()-8.0,16.0,16.0),Font::Icon,if *enabled{muted()}else{faint()},Align::Center);x+=26.0;}
                     let color = if *enabled { ink() } else { faint() };
-                    let reserve = if hint.is_empty() && side.is_none() { 16.0 } else { SIDE_W + 8.0 };
+                    let category=matches!(cmd,MenuCmd::Category(_));
+                    let reserve = if category{32.0}else if hint.is_empty() && side.is_none() { 16.0 } else { SIDE_W + 8.0 };
                     g.text(label, Rect::new(x, r.y, r.right() - x - reserve, r.h), Font::Ui, color, Align::Left);
                     let hint_r = Rect::new(r.right() - SIDE_W - 14.0, r.y, SIDE_W, r.h);
                     if side.is_some() && side_hover {
                         g.round(hint_r.inset(0.0, 5.0), 6.0, line());
                     }
-                    g.text(hint, hint_r.inset(6.0, 0.0), Font::Small, if side.is_some() { muted() } else { faint() }, Align::Right);
+                    g.text(if category{"\u{E76C}"}else{hint}, hint_r.inset(6.0, 0.0), if category{Font::SmallIcon}else{Font::Small}, if side.is_some() { muted() } else { faint() }, Align::Right);
                 }
                 Item::Sep => g.fill(Rect::new(r.x + 10.0, r.cy(), r.w - 20.0, 1.0), line()),
                 Item::Slider { title, level } => {
@@ -718,6 +739,7 @@ impl Menu {
                     let enabled = self.zoom.is_some();
                     g.text("Yakınlaştır", Rect::new(r.x + 16.0, r.y, 120.0, r.h), Font::Ui, if enabled { ink() } else { faint() }, Align::Left);
                     let (minus, value, plus) = Self::zoom_buttons(r);
+                    let full=Rect::new(r.right()-39.0,r.y+5.0,28.0,r.h-10.0);if self.hover==Some(Part::FullScreen){g.round(full,6.0,hover());}g.text("\u{E740}",full,Font::SmallIcon,ink(),Align::Center);
                     for (b, part, icon) in [(minus, Part::Minus, ICON_REMOVE), (plus, Part::Plus, ICON_ADD)] {
                         if enabled && self.hover == Some(part) {
                             g.round(b, 6.0, hover());

@@ -112,8 +112,8 @@ pub const TOOL_ROW: f32 = 52.0;
 pub const TAB_ROW: f32 = 34.0;
 pub const CHROME: f32 = TOOL_ROW + TAB_ROW;
 pub const GUTTER: f32 = 0.0;
-pub const CAPTION_BTN: f32 = 46.0;
-pub const CAPTION_H: f32 = TOOL_ROW;
+
+
 pub const TAB_MIN: f32 = 44.0;
 pub const RESIZE_EDGE: f32 = 6.0;
 /// Odak modunda üstte kalan, fareyi yakalayan şerit.
@@ -132,12 +132,8 @@ pub const ICON_STOP: &str = "\u{E711}";
 pub const ICON_ADD: &str = "\u{E710}";
 pub const ICON_REMOVE: &str = "\u{E738}";
 pub const ICON_CLOSE: &str = "\u{E8BB}";
-pub const ICON_MIN: &str = "\u{E921}";
-pub const ICON_MAX: &str = "\u{E922}";
-pub const ICON_RESTORE: &str = "\u{E923}";
 pub const ICON_LOCK: &str = "\u{E72E}";
 pub const ICON_SEARCH: &str = "\u{E721}";
-pub const ICON_MENU: &str = "\u{E700}";
 pub const ICON_STAR: &str = "\u{E734}";
 pub const ICON_STAR_FILLED: &str = "\u{E735}";
 pub const ICON_PUZZLE: &str = "\u{EA86}";
@@ -148,7 +144,6 @@ pub const ICON_DOC: &str = "\u{E8A5}";
 pub const ICON_FOLDER: &str = "\u{E8B7}";
 pub const ICON_SHARE: &str = "\u{E72D}";
 pub const ICON_PRIVATE: &str = "\u{E727}";
-pub const ICON_HOME: &str = "\u{E80F}";
 
 // ---------- Cam (Acrylic) ----------
 

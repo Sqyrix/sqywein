@@ -226,6 +226,7 @@ impl Gfx {
             };
             // ClearType saydam yüzeyde renkli saçak bırakır; camda gri tonlama.
             unsafe { target.SetTextAntialiasMode(if self.glass { D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE } else { D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE }) };
+            if !self.glass {if let Ok(params)=unsafe{self.dwrite.CreateRenderingParams()}{unsafe{target.SetTextRenderingParams(&params);}}}
             if self.glass {
                 // Gri tonlamada netlik: harf aralıkları piksel ızgarasına oturur (GDI uyumlu
                 // ölçüm), kıvrımlar iki yönde de yumuşatılır (simetrik), kontrast ölçülü artırılır.

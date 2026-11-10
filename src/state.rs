@@ -166,7 +166,7 @@ pub struct AppState {
     pub baseline: Map<String,Value>,
     #[serde(skip)]
     pub storage_error: Option<String>,
-    #[serde(default)]
+    #[serde(default,deserialize_with="null_default")]
     pub session_clean: bool,
     #[serde(default)]
     pub default_prompt_seen: bool,
@@ -179,7 +179,7 @@ pub struct AppState {
     #[serde(default)]
     pub favorites: Vec<Bookmark>,
     /// Okuma Listesi: daha sonra okunacak sayfalar.
-    #[serde(default)]
+    #[serde(default,deserialize_with="null_default")]
     pub reading_list: Vec<Bookmark>,
     /// Ana sayfadaki kısayol kutucukları.
     #[serde(default)]
@@ -238,6 +238,8 @@ fn public_downloads<S: serde::Serializer>(items: &[DownloadRecord], serializer: 
 }
 
 pub const DEFAULT_PROFILE: &str = "default";
+
+pub fn null_default<'de,D,T>(deserializer:D)->Result<T,D::Error> where D:serde::Deserializer<'de>,T:serde::Deserialize<'de>+Default {Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())}
 
 pub fn valid_profile(id: &str) -> bool {
     !id.is_empty() && id.len() <= 64 && id.bytes().all(|c| c.is_ascii_alphanumeric() || c==b'-' || c==b'_')
@@ -307,7 +309,8 @@ pub fn save(state: &mut AppState) -> io::Result<()> {
     for (key,value) in ours.as_object().unwrap(){
         if crate::windows_session::secondary() && (crate::windows_session::private() || crate::integration::other_normal_windows()) && ["Tabs","ActiveIndex","Window","CurrentProfile","SessionClean"].contains(&key.as_str()){continue}
         let before=state.baseline.get(key).unwrap_or(&Value::Null);
-        if before!=value || !object.contains_key(key) {object.insert(key.clone(),merge_value(before,value,object.get(key).unwrap_or(&Value::Null)));}
+        if object.get(key).is_some_and(Value::is_null) && !value.is_null(){object.insert(key.clone(),value.clone());}
+        else if before!=value || !object.contains_key(key) {object.insert(key.clone(),merge_value(before,value,object.get(key).unwrap_or(&Value::Null)));}
     }
     crate::windows_session::checkpoint(state)?;
     crate::storage::write_json(&state_path(),&latest)?;
@@ -340,6 +343,10 @@ fn merge_value(base:&Value,ours:&Value,theirs:&Value)->Value{
 
 #[cfg(test)]
 mod tests {
+    #[test] fn legacy_null_session_marker_keeps_the_session(){
+        let state:AppState=serde_json::from_str(r#"{"SessionClean":null,"ReadingList":null,"Tabs":[{"Title":"Keep","Url":"https://example.invalid/keep"}],"Settings":{"theme":"dark"}}"#).unwrap();
+        assert!(!state.session_clean);assert_eq!(state.tabs.len(),1);assert_eq!(state.tabs[0].title,"Keep");assert_eq!(state.settings.theme,"dark");
+    }
     #[test] fn profile_ids_cannot_escape_the_data_directory(){
         for id in ["../other","a/b","a\\b","", ".", "C:other"]{assert!(!valid_profile(id));}
         let mut s=AppState{profiles:vec![Profile{id:"../../outside".into(),..Default::default()}],current_profile:"../../outside".into(),..Default::default()};

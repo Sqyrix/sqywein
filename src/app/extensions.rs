@@ -540,7 +540,10 @@ impl App {
         if let Some(cancel) = self.preview_cancel.take() { cancel.store(true, std::sync::atomic::Ordering::Relaxed); }
         unsafe { let _ = KillTimer(Some(self.hwnd), super::overlay::TIMER_THUMBNAIL); }
         self.thumbnail_queue.clear(); self.thumbnail_inflight = None;
-        self.surface = None; self.overlay_generation = self.overlay_generation.wrapping_add(1);
+        let overview=matches!(self.surface,Some(super::overlay::Surface::Tabs));
+        self.surface = None;
+        if overview && self.tabs.get(self.active).is_some_and(|t|!t.url.is_empty()&&t.error.is_none()){if let Some(c)=self.tabs[self.active].ctrl.as_ref(){unsafe{let _=c.SetIsVisible(true);}}}
+        self.overlay_generation = self.overlay_generation.wrapping_add(1);
         if let Some(p) = self.popup.take() {
             if let Some(c) = p.ctrl {
                 unsafe { let _ = c.Close(); }
@@ -591,6 +594,7 @@ impl App {
         match msg {
             WM_ACTIVATE if (wparam.0 & 0xFFFF) as u32 == WA_INACTIVE && self.expand.is_some() => Some(LRESULT(0)),
             WM_ACTIVATE if (wparam.0 & 0xFFFF) as u32 == WA_INACTIVE => {
+                if matches!(self.surface,Some(super::overlay::Surface::Tabs)) {return Some(LRESULT(0));}
                 self.close_popup();
                 Some(LRESULT(0))
             }
